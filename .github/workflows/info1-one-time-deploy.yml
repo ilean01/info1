@@ -6,7 +6,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/info1-one-time-deploy.yml'
-      - 'exact-xz/**'
+      - 'xzpayload/**'
 
 permissions:
   contents: write
@@ -20,27 +20,34 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Rebuild INFO1 index from exact payload
+      - name: Rebuild INFO1 index from staged xz payload
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          import base64, lzma, hashlib
+          import base64, lzma, hashlib, re
 
-          root = Path('exact-xz')
-          files = sorted(root.glob('*.b64'))
+          root = Path('xzpayload')
+          files = list(root.glob('*.b64'))
           if not files:
-              raise SystemExit('No exact-xz chunks found')
+              raise SystemExit('No xzpayload chunks found')
 
-          parts = []
-          for p in files:
-              text = ''.join(p.read_text().split())
-              decoded = base64.b64decode(text, validate=True)
-              print(f'{p.name}: {len(text)} chars -> {len(decoded)} bytes')
-              parts.append(decoded)
+          def sort_key(path: Path):
+              m = re.fullmatch(r'(\d+)([a-z]?)\.b64', path.name)
+              if not m:
+                  raise SystemExit(f'Unexpected chunk name: {path.name}')
+              return (int(m.group(1)), m.group(2))
 
-          raw = b''.join(parts)
+          files.sort(key=sort_key)
+          print('chunks:', [p.name for p in files])
+
+          encoded = ''.join(''.join(p.read_text().split()) for p in files)
+          print('base64 chars:', len(encoded))
+          if len(encoded) != 151128:
+              raise SystemExit(f'Unexpected base64 size: {len(encoded)}')
+
+          raw = base64.b64decode(encoded, validate=True)
           print('xz bytes:', len(raw), 'sha256:', hashlib.sha256(raw).hexdigest())
           if len(raw) != 113344:
               raise SystemExit(f'Unexpected xz size: {len(raw)}')
@@ -49,9 +56,11 @@ jobs:
           print('html bytes:', len(html), 'sha256:', hashlib.sha256(html).hexdigest())
           if len(html) < 1000000:
               raise SystemExit('Rebuilt index is unexpectedly small')
+
           lower = html.lower()
           if b'<html' not in lower or b'</html>' not in lower:
               raise SystemExit('Rebuilt payload is not a complete HTML document')
+
           for required in (b'cloud-sync.js', b'supabase-config.js', b'service-worker.js'):
               if required not in html:
                   raise SystemExit(f'Missing reference: {required.decode()}')
