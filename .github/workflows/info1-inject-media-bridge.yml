@@ -1,0 +1,61 @@
+name: INFO1 media bridge patch
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/info1-inject-media-bridge.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Inject Supabase media bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('index.html')
+          text = path.read_text(encoding='utf-8')
+          marker = '<script src="./cloud-sync.js"></script>'
+          bridge = '<script src="./supabase-media-bridge.js"></script>'
+
+          if bridge not in text:
+              if marker not in text:
+                  raise SystemExit('cloud-sync marker not found in index.html')
+              text = text.replace(marker, marker + '\n' + bridge, 1)
+
+          if bridge not in text:
+              raise SystemExit('media bridge injection failed')
+          if '<link rel="manifest" href="./manifest.webmanifest">' not in text:
+              raise SystemExit('PWA manifest reference missing')
+          if 'serviceWorker.register' not in text:
+              raise SystemExit('service worker registration missing')
+
+          path.write_text(text, encoding='utf-8')
+          print('Supabase media bridge is wired into index.html')
+          PY
+
+      - name: Commit patch
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html
+          if git diff --cached --quiet; then
+            echo 'Bridge already present'
+            exit 0
+          fi
+          git commit -m 'Enable Supabase photo sync in INFO1 PWA'
+          git push origin HEAD:main
