@@ -1,0 +1,55 @@
+name: INFO1 one-time source deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/info1-one-time-deploy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download exact INFO1 project archive
+        env:
+          INFO1_URL: https://orioxkwdflqmjqwdqrhf.supabase.co/functions/v1/info1-deploy-transfer?token=info1-24sep-9f2a7d1c-6e04-4ac1-8b38-f1685a2c9d77-TMP
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 "$INFO1_URL" -o /tmp/info1.zip
+          unzip -q /tmp/info1.zip -d /tmp/info1-unpack
+
+          if [ -f /tmp/info1-unpack/index.html ]; then
+            ROOT=/tmp/info1-unpack
+          else
+            ROOT=$(find /tmp/info1-unpack -mindepth 1 -maxdepth 1 -type d | head -n 1)
+          fi
+          test -n "$ROOT"
+          test -f "$ROOT/index.html"
+
+          find . -mindepth 1 -maxdepth 1 ! -name .git ! -name .github -exec rm -rf {} +
+          cp -a "$ROOT"/. .
+
+          rm -rf bundle payload12 tail20 app-parts
+          rm -f .github/workflows/info1-one-time-deploy.yml
+          rmdir .github/workflows 2>/dev/null || true
+          rmdir .github 2>/dev/null || true
+
+      - name: Commit deployed project
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'No changes to commit.'
+            exit 0
+          fi
+          git commit -m 'Deploy INFO1 PWA with Supabase sync'
+          git push origin HEAD:main
