@@ -3,274 +3,270 @@
 
   const cfg = window.INFO1_SUPABASE;
   if (!cfg?.url || !cfg?.publishableKey || !window.supabase?.createClient) {
-    console.warn('INFO1 Cloud Sync: configuración de Supabase no disponible.');
+    console.warn('INFO1 Cloud Sync: Supabase no disponible.');
     return;
   }
 
-  const STORAGE_KEY = 'info1-study-center-v4-priority';
-  const CLOUD_CTX_KEY = 'info1-cloud-context-v1';
-  const CLOUD_RELOAD_KEY = 'info1-cloud-reloaded-v1';
+  const KEY = 'info1-study-center-v4-priority';
+  const RECOVERY_KEY = KEY + '-v15-recovery';
+  const UNSYNCED_KEY = KEY + '-v15-unsynced';
+  const OFFLINE_KEY = 'info1-cloud-offline';
+  const RELOAD_KEY = 'info1-cloud-reloaded-v2';
   const sb = window.supabase.createClient(cfg.url, cfg.publishableKey, {
-    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+    auth: { persistSession:true, autoRefreshToken:true, detectSessionInUrl:true }
   });
   window.INFO1_SUPABASE_CLIENT = sb;
 
   let session = null;
-  let workspace = null;
   let membership = null;
+  let workspace = null;
   let remoteRevision = 0;
-  let cloudTimer = null;
-  let cloudBusy = false;
-  let localDirty = false;
-  let remoteChannel = null;
+  let busy = false;
+  let dirty = false;
+  let timer = null;
+  let monitor = null;
+  let lastRaw = '';
+  let channel = null;
 
-  function el(tag, attrs = {}, html = '') {
-    const node = document.createElement(tag);
-    Object.entries(attrs).forEach(([k,v]) => {
-      if (k === 'class') node.className = v;
-      else if (k === 'type') node.type = v;
-      else node.setAttribute(k, v);
-    });
-    if (html) node.innerHTML = html;
-    return node;
+  const parse = (raw, fallback={}) => { try { return raw ? JSON.parse(raw) : fallback; } catch { return fallback; } };
+  const localState = () => parse(localStorage.getItem(KEY), {});
+  const stateTime = s => {
+    const t = new Date(s?.__settings?.lastSavedAt || 0).getTime();
+    return Number.isFinite(t) ? t : 0;
+  };
+  const normalState = s => s && typeof s === 'object' && !Array.isArray(s) ? s : {};
+
+  function meaningful(s) {
+    if (!s || typeof s !== 'object' || Array.isArray(s)) return false;
+    const set = s.__settings || {};
+    if (set.examDateTimeP1 || set.examDateTimeP2 || set.recoveryDateTimeP2) return true;
+    if (s.__flashcards && Object.keys(s.__flashcards).length) return true;
+    if (s.__flashcardsP2 && (Object.keys(s.__flashcardsP2.ile||{}).length || Object.keys(s.__flashcardsP2.elias||{}).length)) return true;
+    for (const [k,v] of Object.entries(s)) {
+      if (!/^(?:\d+:\d+|p2:(?:ile|elias):\d+:\d+)$/.test(k) || !v || typeof v !== 'object') continue;
+      if ((v.notes||'').trim() || v.review || v.practice || (v.priority && v.priority !== 'normal')) return true;
+      if ((v.sesiones||[]).length || (v.errores||[]).length || (v.historialEstados||[]).length) return true;
+      if (Object.values(v.skills||{}).some(x => x === 'known' || x === 'some')) return true;
+      if (!k.startsWith('p2:') && (v.status === 'known' || v.status === 'some')) return true;
+    }
+    return false;
   }
 
-  function injectStyles() {
+  function addStyles() {
     if (document.getElementById('info1CloudStyles')) return;
-    const style = el('style', { id: 'info1CloudStyles' });
-    style.textContent = `
-      #info1CloudBadge{position:fixed;right:16px;bottom:16px;z-index:9997;border:1px solid rgba(148,163,184,.35);background:rgba(9,16,31,.94);color:#eef2ff;border-radius:16px;padding:10px 12px;box-shadow:0 14px 40px rgba(0,0,0,.35);font:600 12px/1.25 system-ui,-apple-system,sans-serif;max-width:min(360px,calc(100vw - 32px));backdrop-filter:blur(12px)}
-      #info1CloudBadge button{margin-left:8px;border:0;border-radius:10px;padding:6px 9px;cursor:pointer;background:#334155;color:white;font-weight:700}
-      #info1CloudBadge.ok{border-color:rgba(34,197,94,.5)} #info1CloudBadge.warn{border-color:rgba(245,158,11,.55)} #info1CloudBadge.bad{border-color:rgba(239,68,68,.55)}
-      #info1CloudOverlay{position:fixed;inset:0;z-index:10000;background:rgba(2,6,23,.84);display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(10px)}
-      #info1CloudCard{width:min(520px,100%);background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:24px;padding:24px;box-shadow:0 24px 80px rgba(0,0,0,.55);font-family:system-ui,-apple-system,sans-serif}
-      #info1CloudCard h2{margin:0 0 8px;font-size:24px} #info1CloudCard p{color:#cbd5e1;line-height:1.45}
-      #info1CloudCard label{display:block;margin:12px 0 5px;font-size:13px;font-weight:800;color:#e2e8f0}
-      #info1CloudCard input{width:100%;box-sizing:border-box;border:1px solid #475569;background:#020617;color:white;border-radius:12px;padding:11px 12px;font-size:15px}
-      #info1CloudCard .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px} #info1CloudCard button{border:0;border-radius:12px;padding:10px 13px;cursor:pointer;font-weight:800;background:#7c3aed;color:white}
-      #info1CloudCard button.secondary{background:#334155} #info1CloudCard button.ghost{background:transparent;border:1px solid #475569}
-      #info1CloudMsg{min-height:20px;margin-top:10px;color:#fbbf24;font-size:13px;white-space:pre-wrap}
-      #info1WorkspacePanel code{font-size:11px;word-break:break-all;color:#bfdbfe}
+    const s = document.createElement('style');
+    s.id = 'info1CloudStyles';
+    s.textContent = `
+      #info1CloudBadge{position:fixed;right:16px;bottom:16px;z-index:9997;border:1px solid #475569;background:rgba(9,16,31,.96);color:#eef2ff;border-radius:15px;padding:10px 12px;box-shadow:0 14px 40px #0007;font:700 12px/1.25 system-ui;max-width:min(390px,calc(100vw - 32px));backdrop-filter:blur(12px)}
+      #info1CloudBadge.ok{border-color:#22c55e88}#info1CloudBadge.warn{border-color:#f59e0b99}#info1CloudBadge.bad{border-color:#ef444499}
+      #info1CloudBadge button{margin-left:8px;border:0;border-radius:9px;padding:6px 9px;background:#334155;color:#fff;font-weight:800;cursor:pointer}
+      #info1CloudOverlay{position:fixed;inset:0;z-index:10000;background:#020617dd;display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(10px)}
+      #info1CloudCard{width:min(520px,100%);background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:22px;padding:22px;box-shadow:0 24px 80px #0009;font-family:system-ui}
+      #info1CloudCard h2{margin:0 0 8px}#info1CloudCard p{color:#cbd5e1;line-height:1.45}
+      #info1CloudCard label{display:block;margin:12px 0 5px;font-weight:800;font-size:13px}
+      #info1CloudCard input{width:100%;box-sizing:border-box;border:1px solid #475569;background:#020617;color:#fff;border-radius:11px;padding:11px 12px}
+      #info1CloudCard .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}#info1CloudCard button{border:0;border-radius:11px;padding:10px 13px;background:#2563eb;color:#fff;font-weight:800;cursor:pointer}
+      #info1CloudCard button.secondary{background:#334155}#info1CloudCard button.ghost{background:transparent;border:1px solid #475569}
+      #info1CloudMsg{min-height:20px;margin-top:10px;color:#fbbf24;font-size:13px;white-space:pre-wrap}#info1CloudCard code{word-break:break-all;color:#bfdbfe}
     `;
-    document.head.appendChild(style);
+    document.head.appendChild(s);
   }
 
   function badge(text, kind='ok', actions='') {
-    injectStyles();
+    addStyles();
     let b = document.getElementById('info1CloudBadge');
-    if (!b) { b = el('div', { id:'info1CloudBadge' }); document.body.appendChild(b); }
+    if (!b) { b = document.createElement('div'); b.id='info1CloudBadge'; document.body.appendChild(b); }
     b.className = kind;
     b.innerHTML = `<span>${text}</span>${actions}`;
     return b;
   }
 
-  function localState() {
+  async function persistToLocalServer(state) {
+    if (location.protocol === 'file:' || !window.INFO1_BOOT) return false;
     try {
-      if (window.state && typeof window.state === 'object') return window.state;
-      const raw = localStorage.getItem(STORAGE_KEY);
-      return raw ? JSON.parse(raw) : {};
-    } catch { return {}; }
+      let cur = await fetch('/api/state',{cache:'no-store'}).then(r => r.ok ? r.json() : null);
+      if (!cur) return false;
+      if (JSON.stringify(cur.state||{}) === JSON.stringify(state)) return true;
+      let r = await fetch('/api/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({state,expectedRevision:Number(cur.revision||0)})});
+      if (r.status === 409) {
+        cur = await fetch('/api/state',{cache:'no-store'}).then(x => x.ok ? x.json() : null);
+        if (!cur) return false;
+        r = await fetch('/api/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({state,expectedRevision:Number(cur.revision||0)})});
+      }
+      return r.ok;
+    } catch(e) {
+      console.warn('INFO1: no se pudo actualizar state.json local', e);
+      return false;
+    }
   }
 
-  function localTimestamp(s) {
-    const t = new Date(s?.__settings?.lastSavedAt || 0).getTime();
-    return Number.isFinite(t) ? t : 0;
-  }
-
-  function normalizeRemoteState(s) {
-    return s && typeof s === 'object' && !Array.isArray(s) ? s : {};
-  }
-
-  function writeLocalAndReload(remoteState, reason='nube') {
+  async function installState(state, reason='cloud') {
+    const next = normalState(state);
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(remoteState));
-      sessionStorage.setItem(CLOUD_RELOAD_KEY, JSON.stringify({ at:Date.now(), reason }));
+      const oldRaw = localStorage.getItem(KEY);
+      const old = localState();
+      if (oldRaw && JSON.stringify(old) !== JSON.stringify(next) && meaningful(old)) localStorage.setItem(RECOVERY_KEY, oldRaw);
+      localStorage.setItem(KEY, JSON.stringify(next));
+      localStorage.removeItem(UNSYNCED_KEY);
+      sessionStorage.setItem(RELOAD_KEY, JSON.stringify({at:Date.now(),reason}));
+      await persistToLocalServer(next);
       location.reload();
-    } catch (e) {
-      alert('No pude copiar el progreso de la nube al navegador. Exportá un backup local antes de continuar.');
+    } catch(e) {
+      console.error(e);
+      badge('☁️ No pude restaurar en este navegador · la nube sigue intacta','bad');
     }
   }
 
   function showAuth() {
-    injectStyles();
-    let o = document.getElementById('info1CloudOverlay');
-    if (o) return;
-    o = el('div', { id:'info1CloudOverlay' });
-    o.innerHTML = `<div id="info1CloudCard">
-      <h2>☁️ INFO 1 · iniciar sesión</h2>
-      <p>Usamos el mismo Supabase de SCAR, pero INFO1 tiene tablas separadas. El progreso sigue guardándose localmente y además se sincroniza en la nube.</p>
-      <label>Email</label><input id="info1AuthEmail" type="email" autocomplete="email" placeholder="tu@email.com">
-      <label>Contraseña</label><input id="info1AuthPassword" type="password" autocomplete="current-password" placeholder="••••••••">
-      <div class="row"><button id="info1Login">Entrar</button><button id="info1Signup" class="secondary">Crear cuenta</button><button id="info1Offline" class="ghost">Seguir solo en este dispositivo</button></div>
-      <div id="info1CloudMsg"></div>
-    </div>`;
+    addStyles();
+    if (document.getElementById('info1CloudOverlay')) return;
+    const o = document.createElement('div');
+    o.id='info1CloudOverlay';
+    o.innerHTML=`<div id="info1CloudCard"><h2>☁️ INFO 1 · iniciar sesión</h2><p>Tu progreso se guarda en este dispositivo y también en Supabase.</p><label>Email</label><input id="info1AuthEmail" type="email" autocomplete="email"><label>Contraseña</label><input id="info1AuthPassword" type="password" autocomplete="current-password"><div class="row"><button id="info1Login">Entrar</button><button id="info1Signup" class="secondary">Crear cuenta</button><button id="info1Offline" class="ghost">Seguir solo local</button></div><div id="info1CloudMsg"></div></div>`;
     document.body.appendChild(o);
-    const msg = o.querySelector('#info1CloudMsg');
-    const email = o.querySelector('#info1AuthEmail');
-    const pass = o.querySelector('#info1AuthPassword');
-    async function run(mode) {
-      msg.textContent = 'Procesando…';
-      const credentials = { email:email.value.trim(), password:pass.value };
-      if (!credentials.email || !credentials.password) { msg.textContent='Completá email y contraseña.'; return; }
-      const result = mode === 'signup' ? await sb.auth.signUp(credentials) : await sb.auth.signInWithPassword(credentials);
-      if (result.error) { msg.textContent = result.error.message; return; }
-      msg.textContent = mode === 'signup' && !result.data.session ? 'Cuenta creada. Revisá tu email si Supabase pide confirmación.' : 'Sesión iniciada.';
-      if (result.data.session) { o.remove(); await initializeCloud(result.data.session); }
+    const msg=o.querySelector('#info1CloudMsg'), email=o.querySelector('#info1AuthEmail'), pass=o.querySelector('#info1AuthPassword');
+    async function go(signup=false){
+      msg.textContent='Procesando…';
+      const credentials={email:email.value.trim(),password:pass.value};
+      if(!credentials.email||!credentials.password){msg.textContent='Completá email y contraseña.';return;}
+      const res=signup?await sb.auth.signUp(credentials):await sb.auth.signInWithPassword(credentials);
+      if(res.error){msg.textContent=res.error.message;return;}
+      if(!res.data.session){msg.textContent='Cuenta creada. Revisá tu correo si pide confirmación.';return;}
+      o.remove();await initCloud(res.data.session);
     }
-    o.querySelector('#info1Login').onclick = () => run('login');
-    o.querySelector('#info1Signup').onclick = () => run('signup');
-    o.querySelector('#info1Offline').onclick = () => { localStorage.setItem('info1-cloud-offline','1'); o.remove(); badge('💾 Solo local · sin sincronización', 'warn', '<button id="info1EnableCloud">Activar nube</button>'); document.getElementById('info1EnableCloud').onclick=()=>{localStorage.removeItem('info1-cloud-offline');showAuth();}; };
+    o.querySelector('#info1Login').onclick=()=>go(false);
+    o.querySelector('#info1Signup').onclick=()=>go(true);
+    o.querySelector('#info1Offline').onclick=()=>{localStorage.setItem(OFFLINE_KEY,'1');o.remove();showOfflineBadge();};
   }
 
-  async function getMemberships() {
-    const { data, error } = await sb.from('info1_members')
-      .select('workspace_id,display_name,role,info1_workspaces(id,name,created_by,updated_at)')
-      .eq('user_id', session.user.id);
-    if (error) throw error;
-    return data || [];
+  function showOfflineBadge(){
+    badge('💾 Solo local · sin sincronización','warn','<button id="info1EnableCloud">Activar nube</button>');
+    document.getElementById('info1EnableCloud').onclick=()=>{localStorage.removeItem(OFFLINE_KEY);showAuth();};
   }
 
-  async function createWorkspace() {
-    const { data:w, error:e1 } = await sb.from('info1_workspaces')
-      .insert({ name:'INFO 1', created_by:session.user.id }).select('id,name,created_by,updated_at').single();
-    if (e1) throw e1;
-    const display = session.user.user_metadata?.name || session.user.email?.split('@')[0] || 'Ile';
-    const { error:e2 } = await sb.from('info1_members').insert({ workspace_id:w.id, user_id:session.user.id, display_name:display, role:'owner' });
-    if (e2) throw e2;
-    return { workspace_id:w.id, display_name:display, role:'owner', info1_workspaces:w };
+  async function memberships(){
+    const {data,error}=await sb.from('info1_members').select('workspace_id,display_name,role,info1_workspaces(id,name,created_by,updated_at)').eq('user_id',session.user.id);
+    if(error)throw error;return data||[];
   }
 
-  async function joinWorkspaceById(code) {
-    const id = String(code||'').trim();
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) throw new Error('El código del espacio no tiene formato válido.');
-    const display = session.user.user_metadata?.name || session.user.email?.split('@')[0] || 'Estudiante';
-    const { error } = await sb.from('info1_members').insert({ workspace_id:id, user_id:session.user.id, display_name:display, role:'editor' });
-    if (error) throw error;
-    return id;
+  async function createWorkspace(){
+    const {data:w,error:e1}=await sb.from('info1_workspaces').insert({name:'INFO 1',created_by:session.user.id}).select('id,name,created_by,updated_at').single();
+    if(e1)throw e1;
+    const display=session.user.user_metadata?.name||session.user.email?.split('@')[0]||'Estudiante';
+    const {error:e2}=await sb.from('info1_members').insert({workspace_id:w.id,user_id:session.user.id,display_name:display,role:'owner'});if(e2)throw e2;
+    return {workspace_id:w.id,display_name:display,role:'owner',info1_workspaces:w};
   }
 
-  async function chooseWorkspace() {
-    let list = await getMemberships();
-    if (list.length === 1) return list[0];
-    if (!list.length) {
-      return await new Promise(resolve => {
-        injectStyles();
-        const o = el('div', { id:'info1CloudOverlay' });
-        o.innerHTML = `<div id="info1CloudCard"><h2>📚 Espacio INFO 1</h2><p>Si sos la primera persona, creá el espacio. Si Ile ya te pasó un código, pegalo para unirte.</p><label>Código del espacio</label><input id="info1JoinCode" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"><div class="row"><button id="info1CreateWs">Crear espacio</button><button id="info1JoinWs" class="secondary">Unirme</button><button id="info1Logout" class="ghost">Cerrar sesión</button></div><div id="info1CloudMsg"></div></div>`;
-        document.body.appendChild(o);
-        const msg=o.querySelector('#info1CloudMsg');
-        o.querySelector('#info1CreateWs').onclick=async()=>{try{msg.textContent='Creando…';const m=await createWorkspace();o.remove();resolve(m);}catch(e){msg.textContent=e.message;}};
-        o.querySelector('#info1JoinWs').onclick=async()=>{try{msg.textContent='Uniendo…';await joinWorkspaceById(o.querySelector('#info1JoinCode').value);list=await getMemberships();o.remove();resolve(list[0]);}catch(e){msg.textContent=e.message;}};
-        o.querySelector('#info1Logout').onclick=async()=>{await sb.auth.signOut();location.reload();};
-      });
+  async function joinWorkspace(id){
+    id=String(id||'').trim();
+    if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id))throw new Error('Código de espacio inválido.');
+    const display=session.user.user_metadata?.name||session.user.email?.split('@')[0]||'Estudiante';
+    const {error}=await sb.from('info1_members').insert({workspace_id:id,user_id:session.user.id,display_name:display,role:'editor'});if(error)throw error;
+  }
+
+  async function chooseWorkspace(){
+    let list=await memberships();if(list.length)return list[0];
+    return await new Promise(resolve=>{
+      addStyles();const o=document.createElement('div');o.id='info1CloudOverlay';
+      o.innerHTML=`<div id="info1CloudCard"><h2>📚 Espacio INFO 1</h2><p>Creá el espacio si sos la primera persona, o pegá el código para unirte.</p><label>Código</label><input id="info1JoinCode"><div class="row"><button id="info1CreateWs">Crear espacio</button><button id="info1JoinWs" class="secondary">Unirme</button></div><div id="info1CloudMsg"></div></div>`;document.body.appendChild(o);
+      const msg=o.querySelector('#info1CloudMsg');
+      o.querySelector('#info1CreateWs').onclick=async()=>{try{const m=await createWorkspace();o.remove();resolve(m);}catch(e){msg.textContent=e.message;}};
+      o.querySelector('#info1JoinWs').onclick=async()=>{try{await joinWorkspace(o.querySelector('#info1JoinCode').value);list=await memberships();o.remove();resolve(list[0]);}catch(e){msg.textContent=e.message;}};
+    });
+  }
+
+  async function initialPull(){
+    const {data,error}=await sb.from('info1_state').select('state,revision,updated_at,updated_by').eq('workspace_id',workspace.id).maybeSingle();
+    if(error)throw error;
+    const local=localState();
+    if(!data){
+      const {data:created,error:e}=await sb.from('info1_state').insert({workspace_id:workspace.id,state:local,revision:1,updated_by:session.user.id}).select('revision').single();if(e)throw e;
+      remoteRevision=Number(created.revision||1);return 'equal';
     }
-    return list[0];
-  }
+    remoteRevision=Number(data.revision||1);
+    const remote=normalState(data.state);
+    if(JSON.stringify(remote)===JSON.stringify(local))return 'equal';
 
-  async function pullState({ initial=false }={}) {
-    const { data, error } = await sb.from('info1_state').select('state,revision,updated_at,updated_by').eq('workspace_id', workspace.id).maybeSingle();
-    if (error) throw error;
-    if (!data) {
-      const s=localState();
-      const { data:created, error:e }=await sb.from('info1_state').insert({workspace_id:workspace.id,state:s,revision:1,updated_by:session.user.id}).select('revision').single();
-      if(e) throw e; remoteRevision=created.revision||1; return;
+    const rm=meaningful(remote), lm=meaningful(local);
+    if(rm&&!lm){badge('☁️ Recuperando tu progreso guardado…','warn');await installState(remote,'cloud-real-progress');return 'reload';}
+    if(!rm&&lm){dirty=true;return 'local-newer';}
+
+    if(rm&&lm){
+      const rt=stateTime(remote)||new Date(data.updated_at||0).getTime()||0, lt=stateTime(local);
+      if(rt>lt+1500){if(confirm('Hay una copia más nueva en la nube. ¿Cargarla?\n\nLa copia local se conservará como recuperación.')){await installState(remote,'cloud-newer');return 'reload';}return 'keep-local';}
+      if(lt>rt+1500){dirty=true;return 'local-newer';}
+      badge('⚠️ Hay dos copias distintas','warn','<button id="info1UseCloud">Usar nube</button>');
+      document.getElementById('info1UseCloud').onclick=()=>installState(remote,'cloud-conflict');
+      return 'conflict';
     }
-    remoteRevision = Number(data.revision)||1;
-    const remote = normalizeRemoteState(data.state);
-    const local = localState();
-    const rt = new Date(data.updated_at||0).getTime();
-    const lt = localTimestamp(local);
-    const reloaded = (()=>{try{return JSON.parse(sessionStorage.getItem(CLOUD_RELOAD_KEY)||'null');}catch{return null;}})();
-    if (reloaded && Date.now()-Number(reloaded.at||0)<15000) { sessionStorage.removeItem(CLOUD_RELOAD_KEY); return; }
-    if (initial && Object.keys(remote).length && rt > lt + 1500 && JSON.stringify(remote)!==JSON.stringify(local)) {
-      if (!Object.keys(local).length || confirm('Hay una copia más nueva de INFO1 en la nube. ¿Querés cargarla en este dispositivo?\n\nTu copia local seguirá disponible en el backup del navegador hasta la recarga.')) writeLocalAndReload(remote,'remote-newer');
-    }
+
+    await installState(remote,'cloud-default');return 'reload';
   }
 
-  async function pushState() {
-    if (!session || !workspace || cloudBusy || !localDirty) return;
-    cloudBusy=true;
-    localDirty=false;
-    try {
-      const s=localState();
-      const { data:cur, error:e0 }=await sb.from('info1_state').select('revision,updated_at').eq('workspace_id',workspace.id).maybeSingle();
-      if(e0) throw e0;
-      const currentRev=Number(cur?.revision||0);
-      if (remoteRevision && currentRev > remoteRevision) {
-        localDirty=true;
-        badge('⚠️ Nube cambió en otro dispositivo', 'warn', '<button id="info1PullNow">Ver cambio</button>');
-        const btn=document.getElementById('info1PullNow'); if(btn) btn.onclick=async()=>{await pullState({initial:true});};
-        return;
-      }
-      let result;
-      if (!cur) result = await sb.from('info1_state').insert({workspace_id:workspace.id,state:s,revision:1,updated_by:session.user.id}).select('revision').single();
-      else result = await sb.from('info1_state').update({state:s,revision:currentRev+1,updated_by:session.user.id,updated_at:new Date().toISOString()}).eq('workspace_id',workspace.id).eq('revision',currentRev).select('revision').maybeSingle();
-      if(result.error) throw result.error;
-      if(!result.data){localDirty=true;badge('⚠️ Conflicto de sincronización', 'warn');return;}
-      remoteRevision=Number(result.data.revision)||currentRev+1;
-      localStorage.removeItem(STORAGE_KEY+'-v15-unsynced');
-      badge(`☁️ Sincronizado · ${membership?.display_name||session.user.email}`, 'ok', '<button id="info1CloudMenu">Nube</button>');
-      const m=document.getElementById('info1CloudMenu');if(m)m.onclick=showWorkspacePanel;
-    } catch(e) {
-      console.error('INFO1 cloud push',e); localDirty=true; badge('☁️ Sin conexión · guardado local', 'warn', '<button id="info1RetryCloud">Reintentar</button>');
-      const r=document.getElementById('info1RetryCloud');if(r)r.onclick=()=>{localDirty=true;pushState();};
-    } finally { cloudBusy=false; if(localDirty){clearTimeout(cloudTimer);cloudTimer=setTimeout(pushState,3000);} }
+  async function push(){
+    if(!dirty||busy||!session||!workspace)return;
+    busy=true;dirty=false;
+    try{
+      const local=localState();
+      const {data:cur,error}=await sb.from('info1_state').select('state,revision').eq('workspace_id',workspace.id).maybeSingle();if(error)throw error;
+      const cloud=normalState(cur?.state), rev=Number(cur?.revision||0);
+      if(meaningful(cloud)&&!meaningful(local)){await installState(cloud,'empty-guard');return;}
+      if(remoteRevision&&rev>remoteRevision){dirty=true;badge('🔄 Hay cambios nuevos en la nube','warn','<button id="info1PullNow">Cargar</button>');document.getElementById('info1PullNow').onclick=()=>installState(cloud,'remote-changed');return;}
+      const res=cur
+        ? await sb.from('info1_state').update({state:local,revision:rev+1,updated_by:session.user.id,updated_at:new Date().toISOString()}).eq('workspace_id',workspace.id).eq('revision',rev).select('revision').maybeSingle()
+        : await sb.from('info1_state').insert({workspace_id:workspace.id,state:local,revision:1,updated_by:session.user.id}).select('revision').single();
+      if(res.error)throw res.error;if(!res.data){dirty=true;return;}
+      remoteRevision=Number(res.data.revision||rev+1);localStorage.removeItem(UNSYNCED_KEY);lastRaw=localStorage.getItem(KEY)||'';
+      showSyncedBadge();
+    }catch(e){console.error(e);dirty=true;badge('☁️ Sin conexión · guardado local','warn','<button id="info1RetryCloud">Reintentar</button>');document.getElementById('info1RetryCloud').onclick=()=>push();}
+    finally{busy=false;if(dirty){clearTimeout(timer);timer=setTimeout(push,3000);}}
   }
 
-  function wrapSave() {
-    if (window.__INFO1_CLOUD_SAVE_WRAPPED__) return;
-    window.__INFO1_CLOUD_SAVE_WRAPPED__=true;
-    const old=window.save;
-    if(typeof old!=='function')return;
-    window.save=function(...args){const out=old.apply(this,args);localDirty=true;clearTimeout(cloudTimer);cloudTimer=setTimeout(pushState,700);return out;};
+  function startMonitor(){
+    if(monitor)return;lastRaw=localStorage.getItem(KEY)||'';
+    monitor=setInterval(()=>{const raw=localStorage.getItem(KEY)||'';if(raw===lastRaw)return;lastRaw=raw;dirty=true;clearTimeout(timer);timer=setTimeout(push,900);},1200);
   }
 
-  function subscribeRealtime() {
-    if(remoteChannel) sb.removeChannel(remoteChannel);
-    remoteChannel=sb.channel('info1-state-'+workspace.id)
-      .on('postgres_changes',{event:'UPDATE',schema:'public',table:'info1_state',filter:`workspace_id=eq.${workspace.id}`},payload=>{
-        const rev=Number(payload.new?.revision||0);
-        if(rev>remoteRevision){remoteRevision=rev;if(!localDirty)badge('🔄 Hay cambios nuevos de otro dispositivo', 'warn', '<button id="info1ReloadCloud">Cargar</button>');const b=document.getElementById('info1ReloadCloud');if(b)b.onclick=()=>writeLocalAndReload(normalizeRemoteState(payload.new.state),'realtime');}
-      }).subscribe();
+  function subscribe(){
+    if(channel)sb.removeChannel(channel);
+    channel=sb.channel('info1-state-'+workspace.id).on('postgres_changes',{event:'UPDATE',schema:'public',table:'info1_state',filter:`workspace_id=eq.${workspace.id}`},payload=>{
+      const rev=Number(payload.new?.revision||0);if(rev<=remoteRevision)return;remoteRevision=rev;
+      badge('🔄 Hay progreso nuevo de otro dispositivo','warn','<button id="info1ReloadCloud">Cargar</button>');
+      document.getElementById('info1ReloadCloud').onclick=()=>installState(normalState(payload.new.state),'realtime');
+    }).subscribe();
   }
 
-  function showWorkspacePanel() {
+  function showSyncedBadge(){
+    badge(`☁️ Sincronizado · ${membership?.display_name||session?.user?.email||'INFO 1'}`,'ok','<button id="info1CloudMenu">Nube</button>');
+    const b=document.getElementById('info1CloudMenu');if(b)b.onclick=showPanel;
+  }
+
+  function showPanel(){
     if(document.getElementById('info1CloudOverlay'))return;
-    const o=el('div',{id:'info1CloudOverlay'});
-    o.innerHTML=`<div id="info1CloudCard"><h2>☁️ Sincronización INFO 1</h2><div id="info1WorkspacePanel"><p><b>Usuario:</b> ${membership?.display_name||session.user.email}</p><p><b>Espacio:</b> ${workspace.name}</p><p><b>Rol:</b> ${membership?.role||'miembro'}</p><p><b>Código para que Elías se una:</b><br><code>${workspace.id}</code></p><p>Elías debe crear/iniciar sesión y pegar este código una sola vez. Después ambos verán el mismo progreso.</p></div><div class="row"><button id="info1CopyCode">Copiar código</button><button id="info1ForcePush" class="secondary">Guardar ahora</button><button id="info1ForcePull" class="secondary">Cargar nube</button><button id="info1CloseCloud" class="ghost">Cerrar</button><button id="info1LogoutCloud" class="ghost">Salir de la cuenta</button></div><div id="info1CloudMsg"></div></div>`;
-    document.body.appendChild(o);
-    const msg=o.querySelector('#info1CloudMsg');
-    o.querySelector('#info1CopyCode').onclick=async()=>{try{await navigator.clipboard.writeText(workspace.id);msg.textContent='Código copiado.';}catch{msg.textContent='Copiá manualmente el código.';}};
-    o.querySelector('#info1ForcePush').onclick=async()=>{localDirty=true;await pushState();msg.textContent='Guardado solicitado.';};
-    o.querySelector('#info1ForcePull').onclick=async()=>{const {data,error}=await sb.from('info1_state').select('state').eq('workspace_id',workspace.id).single();if(error){msg.textContent=error.message;return;}if(confirm('¿Reemplazar el estado local por la copia de la nube?'))writeLocalAndReload(data.state,'manual-pull');};
+    const o=document.createElement('div');o.id='info1CloudOverlay';
+    o.innerHTML=`<div id="info1CloudCard"><h2>☁️ Sincronización INFO 1</h2><p><b>Usuario:</b> ${membership?.display_name||session.user.email}</p><p><b>Espacio:</b> ${workspace.name}</p><p><b>Código para compartir:</b><br><code>${workspace.id}</code></p><div class="row"><button id="info1ForcePull">Cargar nube</button><button id="info1ForcePush" class="secondary">Guardar ahora</button><button id="info1CloseCloud" class="ghost">Cerrar</button><button id="info1LogoutCloud" class="ghost">Salir</button></div><div id="info1CloudMsg"></div></div>`;document.body.appendChild(o);const msg=o.querySelector('#info1CloudMsg');
+    o.querySelector('#info1ForcePull').onclick=async()=>{const {data,error}=await sb.from('info1_state').select('state').eq('workspace_id',workspace.id).single();if(error){msg.textContent=error.message;return;}if(confirm('¿Reemplazar este dispositivo por la copia de la nube?'))await installState(data.state,'manual-pull');};
+    o.querySelector('#info1ForcePush').onclick=async()=>{dirty=true;await push();msg.textContent='Guardado solicitado.';};
     o.querySelector('#info1CloseCloud').onclick=()=>o.remove();
     o.querySelector('#info1LogoutCloud').onclick=async()=>{await sb.auth.signOut();location.reload();};
   }
 
-  async function initializeCloud(s) {
-    session=s;
-    badge('☁️ Conectando con Supabase…','warn');
-    try {
-      membership=await chooseWorkspace();
-      workspace={id:membership.workspace_id,name:membership.info1_workspaces?.name||'INFO 1',created_by:membership.info1_workspaces?.created_by};
-      localStorage.setItem(CLOUD_CTX_KEY,JSON.stringify({workspaceId:workspace.id,userId:session.user.id}));
-      await pullState({initial:true});
-      wrapSave(); subscribeRealtime();
-      badge(`☁️ Sincronizado · ${membership.display_name||session.user.email}`,'ok','<button id="info1CloudMenu">Nube</button>');
-      const m=document.getElementById('info1CloudMenu');if(m)m.onclick=showWorkspacePanel;
-      localDirty=true; setTimeout(pushState,1000);
-    } catch(e) {
-      console.error(e); badge('☁️ Error de Supabase · datos locales intactos','bad','<button id="info1RetryInit">Reintentar</button>');
-      const r=document.getElementById('info1RetryInit');if(r)r.onclick=()=>initializeCloud(session);
-    }
+  async function initCloud(s){
+    session=s;badge('☁️ Conectando…','warn');
+    try{
+      membership=await chooseWorkspace();workspace={id:membership.workspace_id,name:membership.info1_workspaces?.name||'INFO 1'};
+      const result=await initialPull();if(result==='reload')return;
+      subscribe();startMonitor();showSyncedBadge();
+      if(result==='local-newer'){clearTimeout(timer);timer=setTimeout(push,900);}
+    }catch(e){console.error(e);badge('☁️ Error de Supabase · datos locales intactos','bad','<button id="info1RetryInit">Reintentar</button>');document.getElementById('info1RetryInit').onclick=()=>initCloud(session);}
   }
 
-  async function start() {
-    injectStyles();
-    if(localStorage.getItem('info1-cloud-offline')==='1'){badge('💾 Solo local · sin sincronización','warn','<button id="info1EnableCloud">Activar nube</button>');document.getElementById('info1EnableCloud').onclick=()=>{localStorage.removeItem('info1-cloud-offline');showAuth();};return;}
-    const { data:{session:s} }=await sb.auth.getSession();
+  async function start(){
+    addStyles();
+    if(localStorage.getItem(OFFLINE_KEY)==='1'){showOfflineBadge();return;}
+    const {data:{session:s}}=await sb.auth.getSession();
     if(!s){showAuth();return;}
-    await initializeCloud(s);
+    await initCloud(s);
     sb.auth.onAuthStateChange((_event,newSession)=>{if(!newSession&&!document.getElementById('info1CloudOverlay'))showAuth();});
   }
 
