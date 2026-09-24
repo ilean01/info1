@@ -19,13 +19,13 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Rebuild real INFO1 index
+      - name: Repair payload and rebuild real INFO1 index
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          import base64, lzma, hashlib
+          import base64, lzma, hashlib, subprocess
 
           root = Path('index-payload-v2')
           files = [root / f'{i:03d}.b64' for i in range(11)]
@@ -33,28 +33,92 @@ jobs:
           if missing:
               raise SystemExit(f'Missing chunks: {missing}')
 
-          parts = []
-          for p in files:
-              text = ''.join(p.read_text().split())
-              decoded = base64.b64decode(text, validate=True)
-              print(f'{p.name}: {len(text)} chars -> {len(decoded)} bytes')
-              parts.append(decoded)
+          expected_raw_hash = '8654f7b6c6b2d72f992cd02f84837d3ba40f70e939e8e189fc438ffae1ae965a'
+          expected_html_hash = 'bca2edd64bec5a01d292db2eb6b6c01d08bce822664b46f64ed7870f87901b71'
+
+          def clean_text(text):
+              return ''.join(text.split())
+
+          texts = [clean_text(p.read_text()) for p in files]
+          print('chunk lengths before repair:', [len(t) for t in texts])
+
+          # 004 received one extra Base64 character while it was staged.  We keep
+          # an earlier exact copy in git history and use it as the canonical repair.
+          if len(texts[4]) != 15000:
+              historical = subprocess.check_output(
+                  ['git', 'show', '1effa914780015df054500f87c0f0b38cc69dc76:stage_exact/004.b64'],
+                  text=True
+              )
+              historical = clean_text(historical)
+              print('historical 004 length:', len(historical))
+              if len(historical) == 15000:
+                  texts[4] = historical
+                  files[4].write_text(historical)
+                  print('Repaired index-payload-v2/004.b64 from exact git-history copy')
+
+          def decode_all(candidate_texts):
+              parts = []
+              for p, text in zip(files, candidate_texts):
+                  decoded = base64.b64decode(text, validate=True)
+                  print(f'{p.name}: {len(text)} chars -> {len(decoded)} bytes')
+                  parts.append(decoded)
+              return parts
+
+          try:
+              parts = decode_all(texts)
+          except Exception as exc:
+              raise SystemExit(f'Base64 payload is still invalid after repair: {exc}')
 
           raw = b''.join(parts)
           raw_hash = hashlib.sha256(raw).hexdigest()
           print('xz bytes:', len(raw), 'sha256:', raw_hash)
+
+          # If the historical copy is not the matching one, locate the single
+          # accidental extra character by using the canonical SHA-256.
+          if raw_hash != expected_raw_hash:
+              original_bad = clean_text(files[4].read_text())
+              # Only brute-force when a 15001-character copy is available in HEAD.
+              head_bad = subprocess.check_output(
+                  ['git', 'show', 'HEAD:index-payload-v2/004.b64'], text=True
+              )
+              head_bad = clean_text(head_bad)
+              if len(head_bad) == 15001:
+                  prefix = b''.join(parts[:4])
+                  suffix = b''.join(parts[5:])
+                  found = None
+                  for i in range(len(head_bad)):
+                      candidate = head_bad[:i] + head_bad[i+1:]
+                      try:
+                          dec = base64.b64decode(candidate, validate=True)
+                      except Exception:
+                          continue
+                      h = hashlib.sha256()
+                      h.update(prefix)
+                      h.update(dec)
+                      h.update(suffix)
+                      if h.hexdigest() == expected_raw_hash:
+                          found = candidate
+                          print('Found accidental extra character at position', i)
+                          break
+                  if found is not None:
+                      texts[4] = found
+                      files[4].write_text(found)
+                      parts[4] = base64.b64decode(found, validate=True)
+                      raw = b''.join(parts)
+                      raw_hash = hashlib.sha256(raw).hexdigest()
+
           if len(raw) != 113336:
               raise SystemExit(f'Unexpected xz size: {len(raw)}')
-          if raw_hash != '8654f7b6c6b2d72f992cd02f84837d3ba40f70e939e8e189fc438ffae1ae965a':
-              raise SystemExit('XZ checksum mismatch')
+          if raw_hash != expected_raw_hash:
+              raise SystemExit(f'XZ checksum mismatch: {raw_hash}')
 
           html = lzma.decompress(raw)
           html_hash = hashlib.sha256(html).hexdigest()
           print('html bytes:', len(html), 'sha256:', html_hash)
           if len(html) != 1024745:
               raise SystemExit(f'Unexpected HTML size: {len(html)}')
-          if html_hash != 'bca2edd64bec5a01d292db2eb6b6c01d08bce822664b46f64ed7870f87901b71':
-              raise SystemExit('HTML checksum mismatch')
+          if html_hash != expected_html_hash:
+              raise SystemExit(f'HTML checksum mismatch: {html_hash}')
 
           lower = html.lower()
           if b'<html' not in lower or b'</html>' not in lower:
@@ -64,17 +128,18 @@ jobs:
                   raise SystemExit(f'Missing reference: {required.decode()}')
 
           Path('index.html').write_bytes(html)
+          print('INFO1 index restored successfully')
           PY
 
-      - name: Commit rebuilt index
+      - name: Commit repaired payload and rebuilt index
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add index.html
+          git add index.html index-payload-v2/004.b64
           if git diff --cached --quiet; then
-            echo 'index.html already up to date'
+            echo 'INFO1 files already up to date'
             exit 0
           fi
-          git commit -m 'Restore real INFO1 index'
+          git commit -m 'Restore working INFO1 PWA index'
           git push origin HEAD:main
