@@ -6,7 +6,6 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/info1-one-time-deploy.yml'
-      - 'xzpayload/**'
 
 permissions:
   contents: write
@@ -20,48 +19,47 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Rebuild INFO1 index from staged xz payload
+      - name: Rebuild real INFO1 index
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          import base64, lzma, hashlib, re
+          import base64, lzma, hashlib
 
-          root = Path('xzpayload')
-          files = list(root.glob('*.b64'))
-          if not files:
-              raise SystemExit('No xzpayload chunks found')
+          root = Path('index-payload-v2')
+          files = [root / f'{i:03d}.b64' for i in range(11)]
+          missing = [str(p) for p in files if not p.exists()]
+          if missing:
+              raise SystemExit(f'Missing chunks: {missing}')
 
-          def sort_key(path: Path):
-              m = re.fullmatch(r'(\d+)([a-z]?)\.b64', path.name)
-              if not m:
-                  raise SystemExit(f'Unexpected chunk name: {path.name}')
-              return (int(m.group(1)), m.group(2))
+          parts = []
+          for p in files:
+              text = ''.join(p.read_text().split())
+              decoded = base64.b64decode(text, validate=True)
+              print(f'{p.name}: {len(text)} chars -> {len(decoded)} bytes')
+              parts.append(decoded)
 
-          files.sort(key=sort_key)
-          print('chunks:', [p.name for p in files])
-
-          encoded = ''.join(''.join(p.read_text().split()) for p in files)
-          print('base64 chars:', len(encoded))
-          if len(encoded) != 151128:
-              raise SystemExit(f'Unexpected base64 size: {len(encoded)}')
-
-          raw = base64.b64decode(encoded, validate=True)
-          print('xz bytes:', len(raw), 'sha256:', hashlib.sha256(raw).hexdigest())
-          if len(raw) != 113344:
+          raw = b''.join(parts)
+          raw_hash = hashlib.sha256(raw).hexdigest()
+          print('xz bytes:', len(raw), 'sha256:', raw_hash)
+          if len(raw) != 113336:
               raise SystemExit(f'Unexpected xz size: {len(raw)}')
+          if raw_hash != '8654f7b6c6b2d72f992cd02f84837d3ba40f70e939e8e189fc438ffae1ae965a':
+              raise SystemExit('XZ checksum mismatch')
 
           html = lzma.decompress(raw)
-          print('html bytes:', len(html), 'sha256:', hashlib.sha256(html).hexdigest())
-          if len(html) < 1000000:
-              raise SystemExit('Rebuilt index is unexpectedly small')
+          html_hash = hashlib.sha256(html).hexdigest()
+          print('html bytes:', len(html), 'sha256:', html_hash)
+          if len(html) != 1024745:
+              raise SystemExit(f'Unexpected HTML size: {len(html)}')
+          if html_hash != 'bca2edd64bec5a01d292db2eb6b6c01d08bce822664b46f64ed7870f87901b71':
+              raise SystemExit('HTML checksum mismatch')
 
           lower = html.lower()
           if b'<html' not in lower or b'</html>' not in lower:
-              raise SystemExit('Rebuilt payload is not a complete HTML document')
-
-          for required in (b'cloud-sync.js', b'supabase-config.js', b'service-worker.js'):
+              raise SystemExit('Not a complete HTML document')
+          for required in (b'cloud-sync.js', b'supabase-config.js', b'service-worker.js', b'manifest.webmanifest'):
               if required not in html:
                   raise SystemExit(f'Missing reference: {required.decode()}')
 
@@ -78,5 +76,5 @@ jobs:
             echo 'index.html already up to date'
             exit 0
           fi
-          git commit -m 'Rebuild complete INFO1 index'
+          git commit -m 'Restore real INFO1 index'
           git push origin HEAD:main
