@@ -17,33 +17,49 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Diagnose staged INFO1 payloads
+      - name: Diagnose binary chunk reconstruction
         run: |
           set -euo pipefail
-          for spec in "app-parts/*.txt" "bundle/*.b64" "payload12/*.b64"; do
-            echo "=== $spec ==="
-            if compgen -G "$spec" > /dev/null; then
-              cat $spec > /tmp/payload.b64
-              echo "base64-bytes=$(wc -c < /tmp/payload.b64)"
-              if base64 -d /tmp/payload.b64 > /tmp/payload.bin 2>/tmp/base64.err; then
-                echo "decoded-bytes=$(wc -c < /tmp/payload.bin)"
-                file /tmp/payload.bin || true
-                if gzip -t /tmp/payload.bin 2>/tmp/gzip.err; then
-                  gzip -dc /tmp/payload.bin > /tmp/payload.out
-                  echo "gunzip-bytes=$(wc -c < /tmp/payload.out)"
-                  echo "head:"; head -c 120 /tmp/payload.out | tr '\n' ' '; echo
-                  echo "tail:"; tail -c 120 /tmp/payload.out | tr '\n' ' '; echo
-                  grep -q 'cloud-sync.js' /tmp/payload.out && echo 'contains-cloud-sync=yes' || echo 'contains-cloud-sync=no'
-                  grep -q 'supabase-config.js' /tmp/payload.out && echo 'contains-supabase-config=yes' || echo 'contains-supabase-config=no'
-                else
-                  echo 'gzip=no'
-                  cat /tmp/gzip.err || true
-                fi
+          diagnose_dir() {
+            dir="$1"; glob="$2"; out="/tmp/${dir}.bin"
+            : > "$out"
+            echo "=== $dir individual decode ==="
+            for f in $glob; do
+              echo -n "$(basename "$f") chars=$(wc -c < "$f") "
+              if base64 -d "$f" > /tmp/one.bin 2>/tmp/one.err; then
+                echo -n "decoded=$(wc -c < /tmp/one.bin) head="
+                xxd -p -l 8 /tmp/one.bin | tr -d '\n'; echo
+                cat /tmp/one.bin >> "$out"
               else
-                echo 'base64=no'
-                cat /tmp/base64.err || true
+                echo "INVALID: $(cat /tmp/one.err)"
               fi
+            done
+            echo "combined-bytes=$(wc -c < "$out")"
+            file "$out" || true
+            if gzip -t "$out" 2>/tmp/gzip.err; then
+              echo "gzip=yes"
+              gzip -dc "$out" > "/tmp/${dir}.out"
+              echo "gunzip-bytes=$(wc -c < "/tmp/${dir}.out")"
+              head -c 80 "/tmp/${dir}.out" | tr '\n' ' '; echo
+              tail -c 80 "/tmp/${dir}.out" | tr '\n' ' '; echo
             else
-              echo 'missing'
+              echo "gzip=no: $(cat /tmp/gzip.err)"
             fi
-          done
+          }
+          diagnose_dir bundle 'bundle/*.b64'
+          diagnose_dir payload12 'payload12/*.b64'
+
+          echo '=== candidate app-parts + payload12(binary) ==='
+          cat app-parts/*.txt > /tmp/app.b64
+          base64 -d /tmp/app.b64 > /tmp/app.bin
+          cat /tmp/app.bin /tmp/payload12.bin > /tmp/candidate.bin
+          echo "candidate-bytes=$(wc -c < /tmp/candidate.bin)"
+          if gzip -t /tmp/candidate.bin 2>/tmp/candidate.err; then
+            echo 'candidate-gzip=yes'
+            gzip -dc /tmp/candidate.bin > /tmp/candidate.html
+            echo "candidate-html-bytes=$(wc -c < /tmp/candidate.html)"
+            grep -q 'cloud-sync.js' /tmp/candidate.html && echo 'cloud-sync=yes' || echo 'cloud-sync=no'
+            grep -q 'supabase-config.js' /tmp/candidate.html && echo 'supabase-config=yes' || echo 'supabase-config=no'
+          else
+            echo "candidate-gzip=no: $(cat /tmp/candidate.err)"
+          fi
