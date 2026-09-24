@@ -1,0 +1,1 @@
+INFO1 staged payload v2: 11 independently base64-encoded chunks, reconstructed by GitHub Actions.
