@@ -1,0 +1,25 @@
+{
+  "name": "INFO 1 · Centro de estudio",
+  "short_name": "INFO 1",
+  "description": "Centro de estudio de Informática 1 con progreso, sesiones, fotos y actividad diaria.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#09101f",
+  "theme_color": "#09101f",
+  "lang": "es-PY",
+  "icons": [
+    {
+      "src": "./icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
