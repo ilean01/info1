@@ -1,0 +1,1 @@
+Temporary staged payload used once to reconstruct index.html. Safe to delete after the workflow succeeds.
