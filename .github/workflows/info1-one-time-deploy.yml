@@ -40,19 +40,35 @@ jobs:
               return (int(m.group(1)), m.group(2))
 
           files.sort(key=key)
-          payload = ''.join(p.read_text().strip() for p in files)
-          raw = base64.b64decode(payload, validate=True)
-          html = lzma.decompress(raw)
+          parts = []
+          for p in files:
+              text = ''.join(p.read_text().split())
+              try:
+                  decoded = base64.b64decode(text, validate=True)
+              except Exception as exc:
+                  raise SystemExit(f'{p}: invalid base64: {exc}')
+              print(f'{p.name}: {len(text)} base64 chars -> {len(decoded)} bytes')
+              parts.append(decoded)
+
+          raw = b''.join(parts)
+          try:
+              html = lzma.decompress(raw)
+          except Exception as exc:
+              raise SystemExit(f'XZ payload could not be decompressed: {exc}')
+
           print('chunks:', [p.name for p in files])
           print('decoded xz bytes:', len(raw))
           print('html bytes:', len(html))
           print('sha256:', hashlib.sha256(html).hexdigest())
+
           if len(html) < 500000:
               raise SystemExit('Rebuilt index is unexpectedly small')
-          if b'<html' not in html.lower() or b'</html>' not in html.lower():
+          lower = html.lower()
+          if b'<html' not in lower or b'</html>' not in lower:
               raise SystemExit('Rebuilt payload is not a complete HTML document')
           if b'cloud-sync.js' not in html or b'supabase-config.js' not in html:
               raise SystemExit('Supabase scripts are missing from rebuilt index')
+
           Path('index.html').write_bytes(html)
           PY
 
