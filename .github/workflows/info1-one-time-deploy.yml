@@ -1,11 +1,12 @@
 name: INFO1 staged deploy
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
       - '.github/workflows/info1-one-time-deploy.yml'
-  workflow_dispatch:
+      - 'xzpayload/**'
 
 permissions:
   contents: write
@@ -16,50 +17,54 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Diagnose binary chunk reconstruction
+      - name: Rebuild INFO1 index from staged xz payload
+        shell: bash
         run: |
           set -euo pipefail
-          diagnose_dir() {
-            dir="$1"; glob="$2"; out="/tmp/${dir}.bin"
-            : > "$out"
-            echo "=== $dir individual decode ==="
-            for f in $glob; do
-              echo -n "$(basename "$f") chars=$(wc -c < "$f") "
-              if base64 -d "$f" > /tmp/one.bin 2>/tmp/one.err; then
-                echo -n "decoded=$(wc -c < /tmp/one.bin) head="
-                xxd -p -l 8 /tmp/one.bin | tr -d '\n'; echo
-                cat /tmp/one.bin >> "$out"
-              else
-                echo "INVALID: $(cat /tmp/one.err)"
-              fi
-            done
-            echo "combined-bytes=$(wc -c < "$out")"
-            file "$out" || true
-            if gzip -t "$out" 2>/tmp/gzip.err; then
-              echo "gzip=yes"
-              gzip -dc "$out" > "/tmp/${dir}.out"
-              echo "gunzip-bytes=$(wc -c < "/tmp/${dir}.out")"
-              head -c 80 "/tmp/${dir}.out" | tr '\n' ' '; echo
-              tail -c 80 "/tmp/${dir}.out" | tr '\n' ' '; echo
-            else
-              echo "gzip=no: $(cat /tmp/gzip.err)"
-            fi
-          }
-          diagnose_dir bundle 'bundle/*.b64'
-          diagnose_dir payload12 'payload12/*.b64'
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, lzma, hashlib, re
 
-          echo '=== candidate app-parts + payload12(binary) ==='
-          cat app-parts/*.txt > /tmp/app.b64
-          base64 -d /tmp/app.b64 > /tmp/app.bin
-          cat /tmp/app.bin /tmp/payload12.bin > /tmp/candidate.bin
-          echo "candidate-bytes=$(wc -c < /tmp/candidate.bin)"
-          if gzip -t /tmp/candidate.bin 2>/tmp/candidate.err; then
-            echo 'candidate-gzip=yes'
-            gzip -dc /tmp/candidate.bin > /tmp/candidate.html
-            echo "candidate-html-bytes=$(wc -c < /tmp/candidate.html)"
-            grep -q 'cloud-sync.js' /tmp/candidate.html && echo 'cloud-sync=yes' || echo 'cloud-sync=no'
-            grep -q 'supabase-config.js' /tmp/candidate.html && echo 'supabase-config=yes' || echo 'supabase-config=no'
-          else
-            echo "candidate-gzip=no: $(cat /tmp/candidate.err)"
+          root = Path('xzpayload')
+          files = list(root.glob('*.b64'))
+          if not files:
+              raise SystemExit('No xzpayload chunks found')
+
+          def key(path):
+              m = re.fullmatch(r'(\d+)([a-z]?)\.b64', path.name)
+              if not m:
+                  return (10**9, path.name)
+              return (int(m.group(1)), m.group(2))
+
+          files.sort(key=key)
+          payload = ''.join(p.read_text().strip() for p in files)
+          raw = base64.b64decode(payload, validate=True)
+          html = lzma.decompress(raw)
+          print('chunks:', [p.name for p in files])
+          print('decoded xz bytes:', len(raw))
+          print('html bytes:', len(html))
+          print('sha256:', hashlib.sha256(html).hexdigest())
+          if len(html) < 500000:
+              raise SystemExit('Rebuilt index is unexpectedly small')
+          if b'<html' not in html.lower() or b'</html>' not in html.lower():
+              raise SystemExit('Rebuilt payload is not a complete HTML document')
+          if b'cloud-sync.js' not in html or b'supabase-config.js' not in html:
+              raise SystemExit('Supabase scripts are missing from rebuilt index')
+          Path('index.html').write_bytes(html)
+          PY
+
+      - name: Commit rebuilt index
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html
+          if git diff --cached --quiet; then
+            echo 'index.html already up to date'
+            exit 0
           fi
+          git commit -m 'Rebuild complete INFO1 index'
+          git push origin HEAD:main
