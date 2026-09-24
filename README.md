@@ -1,24 +1,45 @@
 # INFO 1
 
-Centro de estudio de Informática 1.
+Centro de estudio PWA de Informática 1 para Ile + Elías.
 
 ## Estado actual
 
-- Web estática/PWA preparada para GitHub Pages.
+- PWA publicada con GitHub Pages.
+- `index.html` real restaurado y desplegado correctamente.
+- Manifest, iconos para instalación y `service-worker.js` activos.
 - Persistencia local mediante `localStorage` e `IndexedDB`.
-- Sincronización compartida con Supabase mediante `supabase-config.js` y `cloud-sync.js`.
-- Backend INFO1 aislado dentro del proyecto Supabase compartido con SCAR mediante tablas `info1_*` y bucket privado `info1-photos`.
-- Correcciones de fecha/calendario aplicadas para zona horaria local.
-- Los iconos PWA y `service-worker.js` ya están versionados en el repositorio.
-
-## Estado del despliegue
-
-El archivo `index.html` definitivo se reconstruye mediante `.github/workflows/info1-one-time-deploy.yml` a partir del payload XZ staged en `xzpayload/`. El workflow valida que el HTML sea completo, que tenga más de 500 KB y que cargue `supabase-config.js` y `cloud-sync.js` antes de reemplazar `index.html`.
+- Fecha/hora local y calendario corregidos para no desplazar días por UTC.
+- Contadores de parcial y recuperatorio.
+- Perfiles separados de Ile y Elías, vista conjunta y red de conocimiento.
+- Segundo parcial con PDA, NPDA, Gramáticas y Máquinas de Turing.
+- Flashcards, simulacros, radar de examen, prioridades, cronómetro, errores y fotos.
 
 ## Supabase
 
-La configuración cliente usa únicamente una clave publishable. No debe subirse ninguna `service_role` ni clave secreta al frontend.
+INFO1 comparte el proyecto Supabase de SCAR sin mezclar sus datos. Usa objetos separados:
 
-## Materiales
+- `info1_workspaces`
+- `info1_members`
+- `info1_state`
+- `info1_photos`
+- bucket privado `info1-photos`
 
-El HTML referencia PDFs dentro de `materiales/`. Esos PDFs pesados todavía deben comprobarse/subirse por separado si se quiere que los enlaces internos funcionen desde GitHub Pages.
+La sincronización del estado usa RLS y Realtime. `info1_state` está agregado a la publicación `supabase_realtime`, por lo que un cambio de otro dispositivo puede avisarse sin tener que recargar a ciegas.
+
+Las fotos ahora se conectan directamente con Supabase mediante `supabase-media-bridge.js`. Cuando hay sesión de nube, las fotos de una ficha se almacenan en el bucket privado y sus metadatos en `info1_photos`; si se elige trabajar solo localmente, la aplicación conserva el fallback de IndexedDB.
+
+El frontend usa únicamente una clave publishable. Nunca debe subirse una `service_role` ni otra clave secreta al repositorio.
+
+## PWA / offline
+
+`service-worker.js` usa el caché `info1-pwa-v3` e incluye el puente de fotos además del HTML, manifest, configuración de Supabase, sincronización e iconos. La estrategia actual intenta red primero y usa caché como respaldo.
+
+## Despliegue
+
+GitHub Pages despliega desde `main`. El último parche que habilita la sincronización de fotos fue desplegado correctamente.
+
+El workflow `.github/workflows/info1-one-time-deploy.yml` conserva el mecanismo de recuperación del HTML grande a partir del payload verificado. El workflow `.github/workflows/info1-inject-media-bridge.yml` realizó la inyección controlada del puente de fotos en el HTML restaurado.
+
+## Pendiente importante
+
+El HTML contiene vistas que apuntan a PDFs bajo `materiales/` (por ejemplo las diapositivas del profesor). Esa carpeta todavía no está versionada en el repositorio, por lo que esos enlaces concretos deben cargarse o ajustarse antes de considerarlos terminados en GitHub Pages.
