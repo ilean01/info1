@@ -7,6 +7,9 @@
   const OFFLINE_KEY = 'info1-cloud-offline';
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+  let cachedContext = null;
+  let contextPromise = null;
+
   function apiRoute(input) {
     const raw = typeof input === 'string' ? input : input?.url;
     if (!raw) return null;
@@ -15,6 +18,8 @@
     if (url.origin !== location.origin) return null;
     if (url.pathname === '/api/health') return { type:'health', url };
     if (url.pathname === '/api/photos') return { type:'photos', url };
+    if (url.pathname === '/api/state') return { type:'state', url };
+    if (url.pathname === '/api/state/history') return { type:'state-history', url };
     const m = url.pathname.match(/^\/api\/photos\/([^/]+)$/);
     if (m) return { type:'photo', id:decodeURIComponent(m[1]), url };
     return null;
@@ -32,24 +37,46 @@
     catch { return null; }
   }
 
-  async function cloudContext({waitMs=5000}={}) {
+  function saveCloudContext(workspaceId, userId) {
+    try {
+      localStorage.setItem(CLOUD_CTX_KEY, JSON.stringify({workspaceId,userId,updatedAt:new Date().toISOString()}));
+    } catch {}
+  }
+
+  async function resolveCloudContext() {
     if (localStorage.getItem(OFFLINE_KEY) === '1') return null;
-    const end = Date.now() + waitMs;
-    do {
-      const sb = window.INFO1_SUPABASE_CLIENT;
-      const local = readCloudContext();
-      if (sb && local?.workspaceId) {
-        try {
-          const { data, error } = await sb.auth.getSession();
-          if (!error && data?.session?.user?.id) {
-            return { sb, workspaceId:local.workspaceId, user:data.session.user };
-          }
-        } catch {}
-      }
-      if (Date.now() >= end) break;
-      await new Promise(r => setTimeout(r, 120));
-    } while (true);
-    return null;
+    const sb = window.INFO1_SUPABASE_CLIENT;
+    if (!sb) return null;
+
+    const { data, error } = await sb.auth.getSession();
+    if (error || !data?.session?.user?.id) return null;
+    const user = data.session.user;
+
+    if (cachedContext?.user?.id === user.id && cachedContext?.workspaceId) return cachedContext;
+
+    let workspaceId = readCloudContext()?.workspaceId || null;
+    if (!workspaceId) {
+      const { data:membership, error:membershipError } = await sb
+        .from('info1_members')
+        .select('workspace_id')
+        .eq('user_id', user.id)
+        .limit(1)
+        .maybeSingle();
+      if (membershipError || !membership?.workspace_id) return null;
+      workspaceId = membership.workspace_id;
+    }
+
+    cachedContext = { sb, workspaceId, user };
+    saveCloudContext(workspaceId, user.id);
+    return cachedContext;
+  }
+
+  async function cloudContext() {
+    if (cachedContext?.workspaceId) return cachedContext;
+    if (!contextPromise) {
+      contextPromise = resolveCloudContext().finally(() => { contextPromise = null; });
+    }
+    return contextPromise;
   }
 
   function safeName(value) {
@@ -178,6 +205,22 @@
     if (error) throw error;
   }
 
+  async function deleteAllPhotos(ctx) {
+    const {data, error} = await ctx.sb.from('info1_photos')
+      .select('id,storage_path')
+      .eq('workspace_id',ctx.workspaceId);
+    if (error) throw error;
+    const paths = (data || []).map(r => r.storage_path).filter(Boolean);
+    if (paths.length) {
+      const {error:storageError} = await ctx.sb.storage.from(BUCKET).remove(paths);
+      if (storageError) throw storageError;
+    }
+    const {error:deleteError} = await ctx.sb.from('info1_photos')
+      .delete()
+      .eq('workspace_id',ctx.workspaceId);
+    if (deleteError) throw deleteError;
+  }
+
   async function patchPhoto(ctx, id, payload) {
     if (!UUID_RE.test(String(id || ''))) throw new Error('ID de foto inválido');
     const type = String(payload?.evidenceType || 'progress');
@@ -197,20 +240,41 @@
     if (!route) return nativeFetch(input, init);
 
     const method = String(init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
+
+    // The bridge itself being loaded is enough to report health. This avoids
+    // hundreds of concurrent 5-second waits from the old photo-preview code.
+    if (route.type === 'health') {
+      return json({ok:true,provider:'supabase-bridge'});
+    }
+
+    // Silence the legacy localhost state sync. cloud-sync.js is the only code
+    // that writes study progress to Supabase.
+    if (route.type === 'state' && method === 'POST') {
+      return json({revision:Date.now(),savedAt:new Date().toISOString(),provider:'cloud-sync'});
+    }
+    if (route.type === 'state-history' && method === 'GET') {
+      return json({versions:[]});
+    }
+    if (route.type === 'state' && method === 'GET') {
+      return json({error:'El progreso se recupera desde Supabase.'},404);
+    }
+
     try {
-      const ctx = await cloudContext({waitMs: method === 'GET' ? 5000 : 2500});
+      const ctx = await cloudContext();
       if (!ctx) {
-        if (route.type === 'health') return json({ok:false,mode:'local'},503);
+        if (route.type === 'photos' && method === 'GET') return json([]);
         return json({error:'La nube de INFO 1 todavía no está conectada.'},503);
       }
-
-      if (route.type === 'health') return json({ok:true,provider:'supabase',workspaceId:ctx.workspaceId});
 
       if (route.type === 'photos' && method === 'GET') {
         return json(await listPhotos(ctx, route.url.searchParams.get('topicId')));
       }
       if (route.type === 'photos' && method === 'POST') {
         return json(await createPhoto(ctx, await bodyJson(input,init)),201);
+      }
+      if (route.type === 'photos' && method === 'DELETE') {
+        await deleteAllPhotos(ctx);
+        return json({ok:true});
       }
       if (route.type === 'photo' && method === 'DELETE') {
         await deletePhoto(ctx,route.id);
@@ -226,5 +290,6 @@
     }
   };
 
-  console.info('INFO1: puente de fotos Supabase activo');
+  window.INFO1_MEDIA_BRIDGE_READY = true;
+  console.info('INFO1: puente Supabase activo sin API local');
 })();
