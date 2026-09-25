@@ -807,7 +807,7 @@ html,body{max-width:100%;overflow-x:hidden}
   <div class="row"><label><span><input id="modalReview" type="checkbox"> Quiero repasar</span></label><label><span><input id="modalPractice" type="checkbox"> Quiero practicar</span></label></div>
   <label>Notas personales<textarea id="modalNotes" placeholder="Ej.: entiendo la idea pero me confundo con la segunda inclusión…"></textarea></label>
 
-  <div class="detail-panel"><h4>⏱️ Sesiones de estudio</h4><p>El tiempo se calcula usando la diferencia real entre inicio y fin. Las sesiones menores a 15 segundos se descartan.</p><div class="modal-timer-strip"><div class="modal-timer-info"><span id="modalTimerSummary">Sin sesiones</span><span id="modalLiveTimer" class="modal-live-timer">00:00:00</span></div><button id="modalTimerBtn" type="button">▶️ Empezar</button></div><button id="manualSessionToggle" class="panel-button" type="button">+ agregar a mano</button><div id="manualSessionForm" class="manual-session-form"><input id="manualSessionDate" type="date"><input id="manualSessionTime" type="time"><input id="manualSessionMinutes" type="number" min="1" step="1" placeholder="minutos"><button id="manualSessionAdd" class="panel-button" type="button">Agregar</button></div><div id="sessionTableWrap" style="margin-top:10px"></div></div>
+  <div class="detail-panel"><h4>⏱️ Sesiones de estudio</h4><p>El tiempo empieza automáticamente al abrir esta ficha y se detiene al salir. También podés pausarlo o reanudarlo con el botón, y agregar tiempo a mano. Las sesiones menores a 15 segundos se descartan.</p><div class="modal-timer-strip"><div class="modal-timer-info"><span id="modalTimerSummary">Sin sesiones</span><span id="modalLiveTimer" class="modal-live-timer">00:00:00</span></div><button id="modalTimerBtn" type="button">▶️ Empezar</button></div><button id="manualSessionToggle" class="panel-button" type="button">+ agregar a mano</button><div id="manualSessionForm" class="manual-session-form"><input id="manualSessionDate" type="date"><input id="manualSessionTime" type="time"><input id="manualSessionMinutes" type="number" min="1" step="1" placeholder="minutos"><button id="manualSessionAdd" class="panel-button" type="button">Agregar</button></div><div id="sessionTableWrap" style="margin-top:10px"></div></div>
 
   <div class="detail-panel"><h4>⚠️ Historial de errores</h4><p>Registrá en una línea qué te falló para detectar qué errores repetís.</p><div class="error-form"><select id="errorCategory"><option value="definición">Definición</option><option value="construcción">Construcción</option><option value="demostración">Demostración</option><option value="distracción">Distracción</option><option value="enunciado">Enunciado</option></select><input id="errorText" type="text" placeholder="Ej.: confundí ε con ∅"><button id="addErrorBtn" class="panel-button" type="button">+ Registrar error</button></div><div id="modalErrorList" class="error-list"></div></div>
 
@@ -1169,6 +1169,19 @@ let cronoTicker=null;
 function activeCrono(){return state.__crono&&state.__crono.id&&state.__crono.inicio?state.__crono:null;}
 function appendSession(id,inicio,ms){if(ms<15000)return false;getItemState(id).sesiones.push({inicio,ms:Math.round(ms)});return true;}
 function finishActiveCrono(){const c=activeCrono();if(!c)return false;const elapsed=Math.max(0,Date.now()-new Date(c.inicio).getTime());appendSession(c.id,c.inicio,elapsed);delete state.__crono;save();return true;}
+/* INFO1_AUTO_FICHA_TIMER_V1: al abrir una ficha empieza automáticamente; al cerrarla se detiene. */
+function beginFichaTimer(id){
+  const c=activeCrono();
+  if(c&&c.id===id){ensureCronoTicker();return false;}
+  if(c&&c.id!==id)finishActiveCrono();
+  state.__crono={id,inicio:new Date().toISOString(),source:"ficha-auto"};
+  save();ensureCronoTicker();return true;
+}
+function stopFichaTimer(id){
+  const c=activeCrono();
+  if(!c||c.id!==id)return false;
+  return finishActiveCrono();
+}
 function startTimer(id){const c=activeCrono();if(c&&c.id===id){finishActiveCrono();renderAll();return}if(c&&c.id!==id){if(!confirm(`Ya hay un cronómetro corriendo en “${topicTitle(c.id)}”. ¿Querés terminarlo y empezar este?`))return;finishActiveCrono();}state.__crono={id,inicio:new Date().toISOString()};save();ensureCronoTicker();renderAll();}
 function timerLineHtml(id,s){const running=activeCrono()?.id===id;return `<div class="study-line"><span>⏱️ <strong>${formatDuration(sessionTotalMs(s))}</strong> · ${s.sesiones.length} intento${s.sesiones.length===1?"":"s"} ${running?`· <span class="live-timer" data-live-timer="${id}">00:00:00</span>`:""}</span><button class="timer-btn ${running?"running":""}" data-timer-id="${id}">${running?"⏹️ Terminar":"▶️ Empezar"}</button></div>`;}
 function wireTimerButtons(container){container.querySelectorAll("[data-timer-id]").forEach(b=>b.onclick=e=>{e.stopPropagation();startTimer(b.dataset.timerId)});}
@@ -1259,6 +1272,7 @@ function savePersonSkills(profile,si,ii,newSkills){const id=p2PersonId(profile,s
 
 function openModal(si,ii){
   currentEdit={si,ii,id:idFor(si,ii)};
+  beginFichaTimer(currentEdit.id);
   const item=data[si].items[ii],s=getItemState(currentEdit.id);
 
   document.getElementById("modalTitle").textContent=item[0];
@@ -1312,7 +1326,19 @@ function openModal(si,ii){
   document.getElementById("manualSessionMinutes").value="";
   document.getElementById("manualSessionForm").classList.remove("show");
 }
-function closeModal(){document.getElementById("modalBack").classList.remove("show");currentEdit=null;}
+function closeModal(){
+  const id=currentEdit?.id;
+  const stopped=id?stopFichaTimer(id):false;
+  document.getElementById("modalBack").classList.remove("show");
+  currentEdit=null;
+  if(stopped)renderAll();
+}
+
+window.addEventListener("pagehide",()=>{
+  const id=currentEdit?.id;
+  if(id&&activeCrono()?.id===id)stopFichaTimer(id);
+});
+
 function saveModal(){if(!currentEdit)return;const s=getItemState(currentEdit.id);if(activePartial==="p2"){savePersonSkills("ile",currentEdit.si,currentEdit.ii,personModalSkillsValue("ile"));savePersonSkills("elias",currentEdit.si,currentEdit.ii,personModalSkillsValue("elias"));}else{const newSkills=modalSkillsValue(),prevAgg=s.status;for(const k of SKILLS){const old=s.skills[k],nw=newSkills[k];if(old!==nw){s.skills[k]=nw;const newAgg=aggregateFromSkills(s.skills);recordSkillChange(currentEdit.id,k,old,nw,prevAgg,newAgg);}}s.status=aggregateFromSkills(s.skills);}s.priority=document.getElementById("modalPriority").value;s.review=document.getElementById("modalReview").checked;s.practice=document.getElementById("modalPractice").checked;s.notes=document.getElementById("modalNotes").value.trim();save();closeModal();renderAll();}
 
 /* ===== Errores ===== */
