@@ -76,5 +76,12 @@ jobs:
           git config user.email 'actions@users.noreply.github.com'
           git add index.html
           git commit -m 'feat: sync latest INFO1 across desktop and mobile'
-          git pull --rebase origin main
-          git push
+          for attempt in 1 2 3 4; do
+            git pull --rebase origin main || { sleep 2; continue; }
+            if git push; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo 'Could not push device sync patch after retries' >&2
+          exit 1
