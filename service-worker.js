@@ -1,5 +1,5 @@
-const CACHE = 'info1-pwa-v10';
-const VERSION = '10';
+const CACHE = 'info1-pwa-v11';
+const VERSION = '11';
 const CORE = [
   './index.html',
   './manifest.webmanifest',
@@ -10,47 +10,14 @@ const CORE = [
   './icons/icon-512.png'
 ];
 
-function json(data, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 'no-store'
-    }
-  });
-}
+const SCOPE_PATH = new URL(self.registration.scope).pathname;
+const APP_PATH = SCOPE_PATH.endsWith('/') ? SCOPE_PATH : SCOPE_PATH + '/';
+const APP_ROOT = APP_PATH.replace(/\/$/, '');
 
-function legacyApiResponse(request, url) {
-  const method = request.method.toUpperCase();
-  const path = url.pathname;
-
-  // The old localhost version of INFO1 used /api/* endpoints. On GitHub Pages
-  // those routes do not exist. Never let them hit GitHub, because hundreds of
-  // photo previews can otherwise create a request storm and trigger HTTP 429.
-  if (path === '/api/health' && method === 'GET') {
-    return json({ ok: true, provider: 'info1-browser-bridge', legacyServer: false });
-  }
-
-  if (path === '/api/photos' && method === 'GET') {
-    return json([]);
-  }
-  if (/^\/api\/photos(?:\/[^/]+)?$/.test(path)) {
-    return json({ error: 'El servidor local antiguo está desactivado.' }, 503);
-  }
-
-  // The real cloud synchronization is handled by cloud-sync.js + Supabase.
-  // Acknowledge the legacy POST so its old retry loop does not run forever.
-  if (path === '/api/state' && method === 'POST') {
-    return json({ revision: Date.now(), savedAt: new Date().toISOString(), provider: 'supabase-bridge' });
-  }
-  if (path === '/api/state/history' && method === 'GET') {
-    return json({ versions: [] });
-  }
-  if (path === '/api/state' && method === 'GET') {
-    return json({ error: 'Usá la copia de Supabase desde INFO1.' }, 404);
-  }
-
-  return json({ error: 'API local desactivada en GitHub Pages.' }, 404);
+function isAppShellNavigation(url) {
+  return url.pathname === APP_PATH ||
+         url.pathname === APP_ROOT ||
+         url.pathname === APP_PATH + 'index.html';
 }
 
 async function refreshCore() {
@@ -58,8 +25,7 @@ async function refreshCore() {
   for (const path of CORE) {
     try {
       const sep = path.includes('?') ? '&' : '?';
-      const freshUrl = `${path}${sep}__info1_sw=${VERSION}`;
-      const response = await fetch(freshUrl, { cache: 'reload' });
+      const response = await fetch(`${path}${sep}__info1_sw=${VERSION}`, { cache: 'reload' });
       if (response && response.ok) await cache.put(path, response.clone());
     } catch (_) {}
   }
@@ -79,21 +45,19 @@ self.addEventListener('activate', event => {
 
 self.addEventListener('fetch', event => {
   const request = event.request;
+  if (request.method !== 'GET') return;
   const url = new URL(request.url);
+  if (url.origin !== self.location.origin) return;
 
-  if (url.origin === self.location.origin && url.pathname.startsWith('/api/')) {
-    event.respondWith(Promise.resolve(legacyApiResponse(request, url)));
-    return;
-  }
-
-  if (request.method !== 'GET' || url.origin !== self.location.origin) return;
-
+  // Only /info1/ itself is an app-shell navigation. Never return
+  // index.html for PDFs or other nested resources.
   if (request.mode === 'navigate') {
+    if (!isAppShellNavigation(url)) return;
     event.respondWith((async () => {
       const cached = await caches.match('./index.html');
       if (cached) return cached;
       try {
-        const response = await fetch(request, { cache: 'no-store' });
+        const response = await fetch('./index.html', { cache: 'no-store' });
         if (response && response.ok) {
           const cache = await caches.open(CACHE);
           await cache.put('./index.html', response.clone());
@@ -109,30 +73,18 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  if (url.pathname.endsWith('/cloud-sync.js') || url.pathname.endsWith('/supabase-config.js') || url.pathname.endsWith('/supabase-media-bridge.js')) {
-    event.respondWith((async () => {
-      try {
-        const response = await fetch(request, { cache: 'reload' });
-        if (response && response.ok) {
-          const cache = await caches.open(CACHE);
-          await cache.put(request, response.clone());
-        }
-        return response;
-      } catch (_) {
-        return (await caches.match(request)) || new Response('', { status: 503 });
-      }
-    })());
-    return;
-  }
-
   event.respondWith((async () => {
     const cached = await caches.match(request);
     if (cached) return cached;
-    const response = await fetch(request);
-    if (response && response.ok && response.type === 'basic') {
-      const cache = await caches.open(CACHE);
-      await cache.put(request, response.clone());
+    try {
+      const response = await fetch(request);
+      if (response && response.ok && response.type === 'basic') {
+        const cache = await caches.open(CACHE);
+        await cache.put(request, response.clone());
+      }
+      return response;
+    } catch (_) {
+      return new Response('', { status: 503 });
     }
-    return response;
   })());
 });
