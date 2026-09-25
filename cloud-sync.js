@@ -12,6 +12,7 @@
   const UNSYNCED_KEY = KEY + '-v15-unsynced';
   const OFFLINE_KEY = 'info1-cloud-offline';
   const HYDRATED_PREFIX = 'info1-cloud-hydrated:';
+
   const sb = window.supabase.createClient(cfg.url, cfg.publishableKey, {
     auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
   });
@@ -23,9 +24,11 @@
   let lastRaw = '';
   let dirty = false;
   let busy = false;
+  let applyingRemote = false;
   let pushTimer = null;
   let monitor = null;
   let channel = null;
+  let initPromise = null;
 
   const parse = (raw, fallback = {}) => { try { return raw ? JSON.parse(raw) : fallback; } catch { return fallback; } };
   const localState = () => parse(localStorage.getItem(KEY), {});
@@ -62,7 +65,7 @@
     const s = document.createElement('style');
     s.id = 'info1CloudStyles';
     s.textContent = `
-      #info1CloudBadge{position:fixed;right:16px;bottom:16px;z-index:9997;border:1px solid #475569;background:rgba(9,16,31,.96);color:#eef2ff;border-radius:15px;padding:10px 12px;box-shadow:0 14px 40px #0007;font:700 12px/1.25 system-ui;max-width:min(430px,calc(100vw - 32px));backdrop-filter:blur(12px)}
+      #info1CloudBadge{position:fixed;right:16px;bottom:16px;z-index:9997;border:1px solid #475569;background:rgba(9,16,31,.96);color:#eef2ff;border-radius:15px;padding:10px 12px;box-shadow:0 14px 40px #0007;font:700 12px/1.25 system-ui;max-width:min(460px,calc(100vw - 32px));backdrop-filter:blur(12px)}
       #info1CloudBadge.ok{border-color:#22c55e88}#info1CloudBadge.warn{border-color:#f59e0b99}#info1CloudBadge.bad{border-color:#ef444499}
       #info1CloudBadge button{margin-left:8px;border:0;border-radius:9px;padding:6px 9px;background:#334155;color:#fff;font-weight:800;cursor:pointer}
       #info1CloudOverlay{position:fixed;inset:0;z-index:10000;background:#020617dd;display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(10px)}
@@ -80,7 +83,11 @@
   function badge(text, kind = 'ok', actions = '') {
     addStyles();
     let b = document.getElementById('info1CloudBadge');
-    if (!b) { b = document.createElement('div'); b.id = 'info1CloudBadge'; document.body.appendChild(b); }
+    if (!b) {
+      b = document.createElement('div');
+      b.id = 'info1CloudBadge';
+      document.body.appendChild(b);
+    }
     b.className = kind;
     b.innerHTML = `<span>${text}</span>${actions}`;
     return b;
@@ -96,20 +103,39 @@
     const msg = o.querySelector('#info1CloudMsg');
     const email = o.querySelector('#info1AuthEmail');
     const pass = o.querySelector('#info1AuthPassword');
+
     async function go(signup = false) {
       msg.textContent = 'Procesando…';
       const credentials = { email: email.value.trim(), password: pass.value };
-      if (!credentials.email || !credentials.password) { msg.textContent = 'Completá email y contraseña.'; return; }
+      if (!credentials.email || !credentials.password) {
+        msg.textContent = 'Completá email y contraseña.';
+        return;
+      }
       const res = signup ? await sb.auth.signUp(credentials) : await sb.auth.signInWithPassword(credentials);
-      if (res.error) { msg.textContent = res.error.message; return; }
-      if (!res.data.session) { msg.textContent = 'Cuenta creada. Revisá tu correo si pide confirmación.'; return; }
+      if (res.error) {
+        msg.textContent = res.error.message;
+        return;
+      }
+      if (!res.data.session) {
+        msg.textContent = 'Cuenta creada. Revisá tu correo si pide confirmación.';
+        return;
+      }
       localStorage.removeItem(OFFLINE_KEY);
       o.remove();
       await initCloud(res.data.session);
     }
+
     o.querySelector('#info1Login').onclick = () => go(false);
     o.querySelector('#info1Signup').onclick = () => go(true);
-    o.querySelector('#info1Offline').onclick = () => { localStorage.setItem(OFFLINE_KEY, '1'); o.remove(); badge('💾 Solo local · nube desactivada', 'warn', '<button id="info1EnableCloud">Activar nube</button>'); document.getElementById('info1EnableCloud').onclick = () => { localStorage.removeItem(OFFLINE_KEY); showAuth(); }; };
+    o.querySelector('#info1Offline').onclick = () => {
+      localStorage.setItem(OFFLINE_KEY, '1');
+      o.remove();
+      badge('💾 Solo local · nube desactivada', 'warn', '<button id="info1EnableCloud">Activar nube</button>');
+      document.getElementById('info1EnableCloud').onclick = () => {
+        localStorage.removeItem(OFFLINE_KEY);
+        showAuth();
+      };
+    };
   }
 
   async function memberships() {
@@ -121,10 +147,18 @@
   }
 
   async function createWorkspace() {
-    const { data: w, error: e1 } = await sb.from('info1_workspaces').insert({ name: 'INFO 1', created_by: session.user.id }).select('id,name,created_by,updated_at').single();
+    const { data: w, error: e1 } = await sb.from('info1_workspaces')
+      .insert({ name: 'INFO 1', created_by: session.user.id })
+      .select('id,name,created_by,updated_at')
+      .single();
     if (e1) throw e1;
     const display = session.user.user_metadata?.name || session.user.email?.split('@')[0] || 'Estudiante';
-    const { error: e2 } = await sb.from('info1_members').insert({ workspace_id: w.id, user_id: session.user.id, display_name: display, role: 'owner' });
+    const { error: e2 } = await sb.from('info1_members').insert({
+      workspace_id: w.id,
+      user_id: session.user.id,
+      display_name: display,
+      role: 'owner'
+    });
     if (e2) throw e2;
     return { workspace_id: w.id, role: 'owner', info1_workspaces: w };
   }
@@ -133,48 +167,107 @@
     id = String(id || '').trim();
     if (!/^[0-9a-f-]{36}$/i.test(id)) throw new Error('Código de espacio inválido.');
     const display = session.user.user_metadata?.name || session.user.email?.split('@')[0] || 'Estudiante';
-    const { error } = await sb.from('info1_members').insert({ workspace_id: id, user_id: session.user.id, display_name: display, role: 'editor' });
+    const { error } = await sb.from('info1_members').insert({
+      workspace_id: id,
+      user_id: session.user.id,
+      display_name: display,
+      role: 'editor'
+    });
     if (error) throw error;
   }
 
   async function chooseWorkspace() {
     let list = await memberships();
     if (list.length) return list[0];
+
     return await new Promise(resolve => {
       addStyles();
+      const old = document.getElementById('info1CloudOverlay');
+      if (old) old.remove();
       const o = document.createElement('div');
       o.id = 'info1CloudOverlay';
       o.innerHTML = `<div id="info1CloudCard"><h2>📚 Espacio INFO 1</h2><p>Creá un espacio o pegá el código para unirte.</p><label>Código</label><input id="info1JoinCode"><div class="row"><button id="info1CreateWs">Crear espacio</button><button id="info1JoinWs" class="secondary">Unirme</button></div><div id="info1CloudMsg"></div></div>`;
       document.body.appendChild(o);
       const msg = o.querySelector('#info1CloudMsg');
-      o.querySelector('#info1CreateWs').onclick = async () => { try { const m = await createWorkspace(); o.remove(); resolve(m); } catch (e) { msg.textContent = e.message; } };
-      o.querySelector('#info1JoinWs').onclick = async () => { try { await joinWorkspace(o.querySelector('#info1JoinCode').value); list = await memberships(); o.remove(); resolve(list[0]); } catch (e) { msg.textContent = e.message; } };
+      o.querySelector('#info1CreateWs').onclick = async () => {
+        try {
+          const m = await createWorkspace();
+          o.remove();
+          resolve(m);
+        } catch (e) { msg.textContent = e.message; }
+      };
+      o.querySelector('#info1JoinWs').onclick = async () => {
+        try {
+          await joinWorkspace(o.querySelector('#info1JoinCode').value);
+          list = await memberships();
+          o.remove();
+          resolve(list[0]);
+        } catch (e) { msg.textContent = e.message; }
+      };
     });
+  }
+
+  function showApplyFallback(message = '☁️ Progreso recuperado') {
+    badge(message, 'warn', '<button id="info1ApplyCloud">Aplicar</button>');
+    const btn = document.getElementById('info1ApplyCloud');
+    if (btn) btn.onclick = () => location.reload();
   }
 
   async function installRemote(remote, revision, reason) {
     const next = normalState(remote);
-    const oldRaw = localStorage.getItem(KEY);
-    if (oldRaw && oldRaw !== JSON.stringify(next)) localStorage.setItem(RECOVERY_KEY, oldRaw);
-    localStorage.setItem(KEY, JSON.stringify(next));
-    localStorage.removeItem(UNSYNCED_KEY);
-    localStorage.setItem(`${HYDRATED_PREFIX}${workspace.id}`, String(revision));
-    sessionStorage.setItem('info1-cloud-last-install', JSON.stringify({ at: Date.now(), reason, revision }));
-    badge('☁️ Progreso recuperado · actualizando pantalla…', 'ok');
-    setTimeout(() => location.reload(), 120);
+    const nextRaw = JSON.stringify(next);
+    const oldRaw = localStorage.getItem(KEY) || '';
+
+    applyingRemote = true;
+    try {
+      if (oldRaw && oldRaw !== nextRaw) localStorage.setItem(RECOVERY_KEY, oldRaw);
+      localStorage.setItem(KEY, nextRaw);
+      localStorage.removeItem(UNSYNCED_KEY);
+      localStorage.setItem(`${HYDRATED_PREFIX}${workspace.id}`, String(revision));
+      sessionStorage.setItem('info1-cloud-last-install', JSON.stringify({ at: Date.now(), reason, revision }));
+      remoteRevision = Number(revision || remoteRevision || 1);
+      dirty = false;
+
+      // La aplicación ya está ejecutándose cuando llega cloud-sync.js.
+      // En vez de recargar la página (lo que provocaba bucles/pantalla blanca),
+      // aplicamos el estado usando la propia función de INFO 1.
+      if (typeof window.applyLoadedState === 'function') {
+        window.applyLoadedState(JSON.parse(nextRaw));
+        lastRaw = localStorage.getItem(KEY) || nextRaw;
+        badge(`☁️ Nube aplicada · rev ${remoteRevision}`, 'ok');
+        return true;
+      }
+
+      lastRaw = nextRaw;
+      showApplyFallback('☁️ Progreso recuperado · tocá Aplicar una vez');
+      return false;
+    } catch (e) {
+      console.error('INFO1 apply remote', e);
+      lastRaw = localStorage.getItem(KEY) || nextRaw;
+      showApplyFallback('☁️ Progreso guardado · no se pudo refrescar la vista');
+      return false;
+    } finally {
+      applyingRemote = false;
+    }
   }
 
   async function hydrateFirst() {
-    const { data, error } = await sb.from('info1_state').select('state,revision,updated_at').eq('workspace_id', workspace.id).maybeSingle();
+    const { data, error } = await sb.from('info1_state')
+      .select('state,revision,updated_at')
+      .eq('workspace_id', workspace.id)
+      .maybeSingle();
     if (error) throw error;
-    const local = localState();
 
+    const local = localState();
     if (!data) {
-      const { data: created, error: e } = await sb.from('info1_state').insert({ workspace_id: workspace.id, state: local, revision: 1, updated_by: session.user.id }).select('revision').single();
+      const { data: created, error: e } = await sb.from('info1_state')
+        .insert({ workspace_id: workspace.id, state: local, revision: 1, updated_by: session.user.id })
+        .select('revision')
+        .single();
       if (e) throw e;
       remoteRevision = Number(created.revision || 1);
       localStorage.setItem(`${HYDRATED_PREFIX}${workspace.id}`, String(remoteRevision));
-      return false;
+      return;
     }
 
     remoteRevision = Number(data.revision || 1);
@@ -186,65 +279,81 @@
     if (remoteRaw === localRaw) {
       localStorage.setItem(`${HYDRATED_PREFIX}${workspace.id}`, String(remoteRevision));
       localStorage.removeItem(UNSYNCED_KEY);
-      return false;
+      lastRaw = localRaw;
+      return;
     }
 
     const remoteScore = progressScore(remote);
     const localScore = progressScore(local);
     const firstHydrationOnThisOrigin = hydratedRevision === 0;
 
-    // Regla de seguridad: en un origen nuevo (GitHub Pages/PWA recién instalada),
-    // la copia existente en Supabase es autoritativa. Esto evita que los 300
-    // temas por defecto en "no sé" reemplacen el progreso real ya migrado.
+    // En un navegador nuevo, la copia restaurada en Supabase es autoritativa.
     if (firstHydrationOnThisOrigin && remoteScore > 0) {
       await installRemote(remote, remoteRevision, 'first-cloud-hydration');
-      return true;
+      return;
     }
 
+    // Si la nube avanzó y no hay una marca explícita de cambios locales, bajar nube.
     if (remoteRevision > hydratedRevision && !localStorage.getItem(UNSYNCED_KEY)) {
       await installRemote(remote, remoteRevision, 'newer-cloud-revision');
-      return true;
+      return;
     }
 
+    // Si la nube conserva más progreso y no es más antigua, también tiene prioridad.
     if (remoteScore > localScore && stateTime(remote) >= stateTime(local)) {
       await installRemote(remote, remoteRevision, 'cloud-has-more-progress');
-      return true;
+      return;
     }
 
-    // Si ya hubo hidratación y realmente existen cambios locales posteriores,
-    // se marcan para subir; nunca se pisa la nube con el estado inicial vacío.
     dirty = true;
-    return false;
   }
 
   function showSyncedBadge() {
     const name = workspace?.name || 'INFO 1';
     badge(`☁️ Sincronizado · ${name} · rev ${remoteRevision}`, 'ok', '<button id="info1PullCloud">Cargar nube</button><button id="info1Logout">Salir</button>');
-    document.getElementById('info1PullCloud').onclick = async () => {
+    const pull = document.getElementById('info1PullCloud');
+    if (pull) pull.onclick = async () => {
       try {
-        const { data, error } = await sb.from('info1_state').select('state,revision').eq('workspace_id', workspace.id).single();
+        badge('☁️ Bajando progreso…', 'ok');
+        const { data, error } = await sb.from('info1_state')
+          .select('state,revision')
+          .eq('workspace_id', workspace.id)
+          .single();
         if (error) throw error;
         await installRemote(data.state, Number(data.revision || 1), 'manual-pull');
-      } catch (e) { badge(`☁️ Error al cargar: ${e.message}`, 'bad'); }
+        showSyncedBadge();
+      } catch (e) {
+        badge(`☁️ Error al cargar: ${e.message}`, 'bad');
+      }
     };
-    document.getElementById('info1Logout').onclick = async () => { await sb.auth.signOut(); location.reload(); };
+    const logout = document.getElementById('info1Logout');
+    if (logout) logout.onclick = async () => {
+      await sb.auth.signOut();
+      session = null;
+      workspace = null;
+      location.reload();
+    };
   }
 
-  async function push() {
-    if (!dirty || busy || !session || !workspace) return;
+  async function push(force = false) {
+    if ((!dirty && !force) || busy || applyingRemote || !session || !workspace || !navigator.onLine) return;
     busy = true;
-    dirty = false;
     try {
       const local = localState();
       const localRaw = JSON.stringify(local);
-      const { data: cur, error } = await sb.from('info1_state').select('state,revision').eq('workspace_id', workspace.id).maybeSingle();
+      const { data: cur, error } = await sb.from('info1_state')
+        .select('state,revision')
+        .eq('workspace_id', workspace.id)
+        .maybeSingle();
       if (error) throw error;
+
       const rev = Number(cur?.revision || 0);
       const cloud = normalState(cur?.state);
       const cloudRaw = JSON.stringify(cloud);
 
       if (localRaw === cloudRaw) {
         remoteRevision = rev;
+        dirty = false;
         localStorage.removeItem(UNSYNCED_KEY);
         localStorage.setItem(`${HYDRATED_PREFIX}${workspace.id}`, String(rev));
         lastRaw = localStorage.getItem(KEY) || '';
@@ -253,30 +362,50 @@
       }
 
       const hydratedRevision = Number(localStorage.getItem(`${HYDRATED_PREFIX}${workspace.id}`) || 0);
-      if (rev > hydratedRevision && rev > remoteRevision) {
-        // Hubo cambio remoto desde la última copia conocida: no sobrescribirlo.
+      const explicitlyUnsynced = localStorage.getItem(UNSYNCED_KEY) === '1';
+
+      // Nunca sobrescribir una revisión remota que apareció después de nuestra base.
+      if (cur && rev > hydratedRevision && rev > remoteRevision && !explicitlyUnsynced) {
         await installRemote(cloud, rev, 'remote-changed-before-push');
+        showSyncedBadge();
         return;
       }
 
-      // Protección adicional contra una pantalla recién inicializada a 0%.
-      if (progressScore(cloud) > progressScore(local) && !localStorage.getItem(`${HYDRATED_PREFIX}${workspace.id}`)) {
+      // Protección ante el estado inicial de 0 %.
+      if (cur && progressScore(cloud) > progressScore(local) && hydratedRevision === 0) {
         await installRemote(cloud, rev, 'empty-local-guard');
+        showSyncedBadge();
         return;
       }
 
       const result = cur
-        ? await sb.from('info1_state').update({ state: local, revision: rev + 1, updated_by: session.user.id, updated_at: new Date().toISOString() }).eq('workspace_id', workspace.id).eq('revision', rev).select('revision').maybeSingle()
-        : await sb.from('info1_state').insert({ workspace_id: workspace.id, state: local, revision: 1, updated_by: session.user.id }).select('revision').single();
+        ? await sb.from('info1_state')
+            .update({ state: local, revision: rev + 1, updated_by: session.user.id, updated_at: new Date().toISOString() })
+            .eq('workspace_id', workspace.id)
+            .eq('revision', rev)
+            .select('revision')
+            .maybeSingle()
+        : await sb.from('info1_state')
+            .insert({ workspace_id: workspace.id, state: local, revision: 1, updated_by: session.user.id })
+            .select('revision')
+            .single();
+
       if (result.error) throw result.error;
-      if (!result.data) { dirty = true; return; }
+      if (!result.data) {
+        dirty = true;
+        badge('☁️ Conflicto de sincronización · no se perdió ningún cambio', 'warn');
+        return;
+      }
+
       remoteRevision = Number(result.data.revision || rev + 1);
+      dirty = false;
       localStorage.setItem(`${HYDRATED_PREFIX}${workspace.id}`, String(remoteRevision));
       localStorage.removeItem(UNSYNCED_KEY);
       lastRaw = localStorage.getItem(KEY) || '';
       showSyncedBadge();
     } catch (e) {
       dirty = true;
+      console.error('INFO1 push', e);
       badge(`☁️ Sin sincronizar · ${e.message}`, 'bad');
     } finally {
       busy = false;
@@ -287,45 +416,76 @@
     lastRaw = localStorage.getItem(KEY) || '';
     if (monitor) clearInterval(monitor);
     monitor = setInterval(() => {
+      if (applyingRemote) return;
       const raw = localStorage.getItem(KEY) || '';
       if (raw !== lastRaw) {
         lastRaw = raw;
         dirty = true;
+        localStorage.setItem(UNSYNCED_KEY, '1');
         clearTimeout(pushTimer);
-        pushTimer = setTimeout(push, 1200);
+        pushTimer = setTimeout(() => push(false), 1200);
       }
-    }, 500);
+    }, 700);
 
     if (channel) sb.removeChannel(channel);
     channel = sb.channel(`info1-state-${workspace.id}`)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'info1_state', filter: `workspace_id=eq.${workspace.id}` }, async payload => {
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'info1_state',
+        filter: `workspace_id=eq.${workspace.id}`
+      }, async payload => {
         const rev = Number(payload.new?.revision || 0);
-        if (rev <= remoteRevision || busy || dirty) return;
+        if (rev <= remoteRevision || busy || dirty || applyingRemote) return;
         try {
-          const { data, error } = await sb.from('info1_state').select('state,revision').eq('workspace_id', workspace.id).single();
+          const { data, error } = await sb.from('info1_state')
+            .select('state,revision')
+            .eq('workspace_id', workspace.id)
+            .single();
           if (error) throw error;
           await installRemote(data.state, Number(data.revision || rev), 'realtime-cloud-change');
-        } catch (e) { console.warn('INFO1 realtime pull', e); }
+          showSyncedBadge();
+        } catch (e) {
+          console.warn('INFO1 realtime pull', e);
+        }
       })
       .subscribe();
   }
 
   async function initCloud(s) {
+    if (!s?.user) return;
+    if (session?.user?.id === s.user.id && workspace && monitor) return;
+    if (initPromise) return initPromise;
+
+    // Se asigna antes de cualquier await para que onAuthStateChange y boot()
+    // no puedan iniciar dos hidrataciones en paralelo.
     session = s;
+
+    initPromise = (async () => {
+      try {
+        badge('☁️ Conectando…', 'ok');
+        const membership = await chooseWorkspace();
+        workspace = membership.info1_workspaces || { id: membership.workspace_id, name: 'INFO 1' };
+        if (!workspace.id) workspace.id = membership.workspace_id;
+        await hydrateFirst();
+        startMonitoring();
+        showSyncedBadge();
+        if (dirty) setTimeout(() => push(false), 1500);
+      } catch (e) {
+        console.error(e);
+        badge(`☁️ Error de sincronización · ${e.message}`, 'bad', '<button id="info1RetryCloud">Reintentar</button>');
+        const btn = document.getElementById('info1RetryCloud');
+        if (btn) btn.onclick = () => {
+          initPromise = null;
+          initCloud(session);
+        };
+      }
+    })();
+
     try {
-      const membership = await chooseWorkspace();
-      workspace = membership.info1_workspaces || { id: membership.workspace_id, name: 'INFO 1' };
-      if (!workspace.id) workspace.id = membership.workspace_id;
-      const reloading = await hydrateFirst();
-      if (reloading) return;
-      showSyncedBadge();
-      startMonitoring();
-      if (dirty) setTimeout(push, 1500);
-    } catch (e) {
-      console.error(e);
-      badge(`☁️ Error de sincronización · ${e.message}`, 'bad', '<button id="info1RetryCloud">Reintentar</button>');
-      const btn = document.getElementById('info1RetryCloud');
-      if (btn) btn.onclick = () => initCloud(session);
+      await initPromise;
+    } finally {
+      initPromise = null;
     }
   }
 
@@ -339,17 +499,53 @@
     }
     if (localStorage.getItem(OFFLINE_KEY) === '1') {
       badge('💾 Solo local · nube desactivada', 'warn', '<button id="info1EnableCloud">Activar nube</button>');
-      document.getElementById('info1EnableCloud').onclick = () => { localStorage.removeItem(OFFLINE_KEY); showAuth(); };
+      document.getElementById('info1EnableCloud').onclick = () => {
+        localStorage.removeItem(OFFLINE_KEY);
+        showAuth();
+      };
       return;
     }
     showAuth();
   }
 
   sb.auth.onAuthStateChange((event, s) => {
-    if (event === 'SIGNED_IN' && s && !session) initCloud(s);
-    if (event === 'SIGNED_OUT') { session = null; workspace = null; }
+    if (event === 'SIGNED_IN' && s) {
+      // No esperamos dentro del callback de Auth: evitamos deadlocks y dobles arranques.
+      setTimeout(() => initCloud(s), 0);
+    }
+    if (event === 'SIGNED_OUT') {
+      session = null;
+      workspace = null;
+      remoteRevision = 0;
+      if (monitor) { clearInterval(monitor); monitor = null; }
+      if (channel) { sb.removeChannel(channel); channel = null; }
+    }
   });
 
-  window.addEventListener('online', () => { if (session && workspace) { dirty = true; push(); } });
-  boot();
+  window.addEventListener('online', () => {
+    if (session && workspace) {
+      badge('☁️ Conexión recuperada · comprobando cambios…', 'ok');
+      if (dirty) push(false);
+      else hydrateFirst().then(showSyncedBadge).catch(e => badge(`☁️ Error · ${e.message}`, 'bad'));
+    }
+  });
+  window.addEventListener('offline', () => badge('💾 Sin conexión · trabajando localmente', 'warn'));
+
+  window.INFO1_CLOUD = {
+    pull: async () => {
+      if (!workspace) return;
+      const { data, error } = await sb.from('info1_state').select('state,revision').eq('workspace_id', workspace.id).single();
+      if (error) throw error;
+      await installRemote(data.state, Number(data.revision || 1), 'api-pull');
+      showSyncedBadge();
+    },
+    push: () => push(true),
+    get revision() { return remoteRevision; },
+    get workspaceId() { return workspace?.id || null; }
+  };
+
+  boot().catch(e => {
+    console.error('INFO1 boot', e);
+    badge(`☁️ Error al iniciar nube · ${e.message}`, 'bad');
+  });
 })();
