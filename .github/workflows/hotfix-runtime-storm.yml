@@ -20,48 +20,51 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
+          import re
+
           p = Path('index.html')
           s = p.read_text(encoding='utf-8')
 
-          old = '''let serverMediaState=null;
-          async function serverMediaAvailable(){if(location.protocol==="file:")return false;if(serverMediaState!==null)return serverMediaState;try{const r=await fetch("/api/health",{cache:"no-store"});return serverMediaState=r.ok}catch(e){return serverMediaState=false}}'''
-          new = '''let serverMediaState=null,serverMediaPromise=null;
+          media_pattern = re.compile(
+              r'let serverMediaState=null;\s*async function serverMediaAvailable\(\)\{if\(location\.protocol==="file:"\)return false;if\(serverMediaState!==null\)return serverMediaState;try\{const r=await fetch\("/api/health",\{cache:"no-store"\}\);return serverMediaState=r\.ok\}catch\(e\)\{return serverMediaState=false\}\}'
+          )
+          media_new = '''let serverMediaState=null,serverMediaPromise=null;
           async function serverMediaAvailable(){
             if(location.protocol==="file:")return false;
-            // GitHub Pages has no /api server. Before the Supabase bridge loads,
-            // use IndexedDB without making any network request. Once the bridge
-            // exists, /api/photos is handled in-browser and can use Supabase.
+            // On GitHub Pages, never probe the old localhost /api endpoint.
+            // Before the Supabase bridge exists, use IndexedDB. After it loads,
+            // /api/photos is intercepted in-browser and backed by Supabase.
             if(location.hostname.endsWith("github.io"))return !!window.INFO1_SUPABASE_CLIENT;
             if(serverMediaState!==null)return serverMediaState;
             if(serverMediaPromise)return serverMediaPromise;
             serverMediaPromise=(async()=>{try{const r=await fetch("/api/health",{cache:"no-store"});serverMediaState=r.ok;return serverMediaState}catch(e){serverMediaState=false;return false}finally{serverMediaPromise=null}})();
             return serverMediaPromise;
           }'''
-          if old not in s:
-              raise SystemExit('serverMediaAvailable block not found; refusing unsafe patch')
-          s = s.replace(old, new, 1)
+          s, n = media_pattern.subn(media_new, s, count=1)
+          if n != 1:
+              raise SystemExit(f'serverMediaAvailable replacements={n}; refusing unsafe patch')
 
-          old_flush = '''async function flushStudyState(){
-            if(syncBusy||!syncDirty||syncBlocked)return;'''
-          new_flush = '''async function flushStudyState(){
+          flush_pattern = re.compile(
+              r'async function flushStudyState\(\)\{\s*if\(syncBusy\|\|!syncDirty\|\|syncBlocked\)return;'
+          )
+          flush_new = '''async function flushStudyState(){
             if(syncBusy||!syncDirty||syncBlocked)return;
-            // The old localhost persistence endpoint does not exist on GitHub Pages.
-            // cloud-sync.js is the authoritative Supabase synchronizer there.
+            // GitHub Pages has no local persistence server. Supabase handles
+            // synchronization through cloud-sync.js, so never call /api/state.
             if(location.hostname.endsWith("github.io")){
               syncDirty=false;
               v14LastSyncStatus=' · Supabase activo';
               renderPersistStatus();
               return;
             }'''
-          if old_flush not in s:
-              raise SystemExit('flushStudyState block not found; refusing unsafe patch')
-          s = s.replace(old_flush, new_flush, 1)
+          s, n = flush_pattern.subn(flush_new, s, count=1)
+          if n != 1:
+              raise SystemExit(f'flushStudyState replacements={n}; refusing unsafe patch')
 
-          # Make material links repo-root absolute so they never accumulate
-          # /materiales/materiales/... when opened from a nested URL.
+          # Use repo-root absolute PDF links. This prevents relative URL nesting
+          # such as /materiales/materiales/materiales/... on nested documents.
           for name in ('05_PDA.pdf','examenes_merged.pdf','Hopcroft_referencia.pdf'):
-              s = s.replace(f'materiales/{name}', f'/info1/materiales/{name}')
-              s = s.replace(f'/info1//info1/materiales/{name}', f'/info1/materiales/{name}')
+              s = re.sub(r'(?<!/info1/)materiales/' + re.escape(name), '/info1/materiales/' + name, s)
 
           p.write_text(s, encoding='utf-8')
 
@@ -120,8 +123,8 @@ jobs:
             const url = new URL(request.url);
             if (url.origin !== self.location.origin) return;
 
-            // CRITICAL: only the actual INFO1 root gets the SPA shell.
-            // PDFs and every other nested URL must go to the network normally.
+            // Only /info1/ itself is an app-shell navigation. Never return
+            // index.html for PDFs or other nested resources.
             if (request.mode === 'navigate') {
               if (!isAppShellNavigation(url)) return;
               event.respondWith((async () => {
