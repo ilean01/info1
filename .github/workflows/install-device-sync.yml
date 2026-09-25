@@ -1,0 +1,75 @@
+name: INFO1 install device sync
+
+on:
+  push:
+    paths:
+      - '.github/workflows/install-device-sync.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install cross-device sync and safe PWA registration
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('index.html')
+          s = p.read_text(encoding='utf-8')
+
+          device_tag = '<script src="./device-sync.js?v=20260925-1"></script>'
+          if device_tag not in s:
+              m = re.search(r'(<script src="\./supabase-media-bridge\.js[^\n]*></script>)', s)
+              if m:
+                  s = s[:m.start()] + device_tag + '\n' + s[m.start():]
+              else:
+                  s = s.replace('</body>', device_tag + '\n</body>', 1)
+
+          old = '''<script>
+if ('serviceWorker' in navigator) { navigator.serviceWorker.getRegistrations().then(rs=>rs.forEach(r=>r.unregister())).catch(()=>{}); }
+</script>'''
+          new = '''<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./service-worker.js?v=network-first-1', { updateViaCache: 'none' })
+      .then(reg => {
+        reg.update().catch(() => {});
+        setInterval(() => reg.update().catch(() => {}), 60000);
+      })
+      .catch(err => console.warn('INFO1 service worker', err));
+  });
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (sessionStorage.getItem('info1-sw-reloaded') === '1') return;
+    sessionStorage.setItem('info1-sw-reloaded', '1');
+    location.reload();
+  });
+}
+</script>'''
+
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif "service-worker.js?v=network-first-1" not in s:
+              s = s.replace('</body>', new + '\n</body>', 1)
+
+          p.write_text(s, encoding='utf-8')
+          PY
+      - name: Commit device sync install
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo 'No changes to commit'
+            exit 0
+          fi
+          git config user.name 'INFO1 sync bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add index.html
+          git commit -m 'feat: sync latest INFO1 across desktop and mobile'
+          git push
