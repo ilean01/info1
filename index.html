@@ -1787,10 +1787,25 @@ setInterval(renderToday,30000);
 <script src="./supabase-config.js?v=stable-20260925-3"></script>
 <script src="./cloud-sync.js?v=stable-20260925-3"></script>
 <script src="./cloud-settings-ui.js?v=20260925-2"></script>
+<script src="./device-sync.js?v=20260925-1"></script>
 <script src="./supabase-media-bridge.js?v=stable-20260925-3"></script>
 
 <script>
-if ('serviceWorker' in navigator) { navigator.serviceWorker.getRegistrations().then(rs=>rs.forEach(r=>r.unregister())).catch(()=>{}); }
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./service-worker.js?v=network-first-1', { updateViaCache: 'none' })
+      .then(reg => {
+        reg.update().catch(() => {});
+        setInterval(() => reg.update().catch(() => {}), 60000);
+      })
+      .catch(err => console.warn('INFO1 service worker', err));
+  });
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (sessionStorage.getItem('info1-sw-reloaded') === '1') return;
+    sessionStorage.setItem('info1-sw-reloaded', '1');
+    location.reload();
+  });
+}
 </script>
 </body>
 </html>
