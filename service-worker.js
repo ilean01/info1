@@ -1,5 +1,5 @@
-const CACHE = 'info1-pwa-v7';
-const VERSION = '7';
+const CACHE = 'info1-pwa-v8';
+const VERSION = '8';
 const CORE = [
   './',
   './index.html',
@@ -17,8 +17,6 @@ async function refreshCore() {
   for (const path of CORE) {
     let stored = false;
 
-    // Pedimos una URL distinta para que el service worker anterior no pueda
-    // devolver su copia vieja de cloud-sync.js desde caché.
     try {
       const sep = path.includes('?') ? '&' : '?';
       const freshUrl = `${path}${sep}__info1_sw=${VERSION}`;
@@ -29,8 +27,6 @@ async function refreshCore() {
       }
     } catch (_) {}
 
-    // Si GitHub Pages está temporalmente limitado, conservamos la copia anterior
-    // para que la PWA siga abriendo en vez de quedar sin shell.
     if (!stored) {
       const old = await caches.match(path);
       if (old) await cache.put(path, old.clone());
@@ -57,8 +53,6 @@ self.addEventListener('fetch', event => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
-  // Navegación: abrir inmediatamente desde la copia local. En segundo plano
-  // intentamos refrescar index.html sin bloquear la interfaz.
   if (request.mode === 'navigate') {
     event.respondWith((async () => {
       const cached = await caches.match('./index.html');
@@ -92,7 +86,6 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Archivos estáticos: cache-first para evitar repetir pedidos a GitHub Pages.
   event.respondWith((async () => {
     const cached = await caches.match(request);
     if (cached) return cached;
