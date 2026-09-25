@@ -1,5 +1,5 @@
-const CACHE = 'info1-pwa-v8';
-const VERSION = '8';
+const CACHE = 'info1-pwa-v9';
+const VERSION = '9';
 const CORE = [
   './',
   './index.html',
@@ -70,7 +70,7 @@ self.addEventListener('fetch', event => {
       }
 
       try {
-        const response = await fetch(request);
+        const response = await fetch(request, { cache: 'no-store' });
         if (response && response.ok) {
           const cache = await caches.open(CACHE);
           await cache.put('./index.html', response.clone());
@@ -81,6 +81,22 @@ self.addEventListener('fetch', event => {
           '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>INFO 1 sin conexión</title><body style="font-family:system-ui;background:#09101f;color:#eef4ff;padding:32px"><h1>INFO 1</h1><p>No se pudo abrir la aplicación. Conectate una vez a internet y volvé a intentar.</p></body>',
           { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
         );
+      }
+    })());
+    return;
+  }
+
+  if (url.pathname.endsWith('/cloud-sync.js') || url.pathname.endsWith('/supabase-config.js')) {
+    event.respondWith((async () => {
+      try {
+        const response = await fetch(request, { cache: 'reload' });
+        if (response && response.ok) {
+          const cache = await caches.open(CACHE);
+          await cache.put(request, response.clone());
+        }
+        return response;
+      } catch (_) {
+        return (await caches.match(request)) || new Response('', { status: 503 });
       }
     })());
     return;
