@@ -1,0 +1,56 @@
+name: INFO1 stable cloud loader
+
+on:
+  push:
+    paths:
+      - '.github/workflows/stabilize-cloud-loader.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Pin fresh cloud scripts and keep service worker disabled
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          p = Path('index.html')
+          s = p.read_text(encoding='utf-8')
+
+          s = re.sub(r'<script src="\./cloud-sync\.js(?:\?[^\"]*)?"></script>',
+                     '<script src="./cloud-sync.js?v=stable-20260925-2"></script>', s, count=1)
+          s = re.sub(r'<script src="\./supabase-media-bridge\.js(?:\?[^\"]*)?"></script>',
+                     '<script src="./supabase-media-bridge.js?v=stable-20260925-2"></script>', s, count=1)
+          s = re.sub(r'<script src="\./supabase-config\.js(?:\?[^\"]*)?"></script>',
+                     '<script src="./supabase-config.js?v=stable-20260925-2"></script>', s, count=1)
+
+          # Never re-register a service worker while we are diagnosing the Pages runtime.
+          s = re.sub(
+              r"if \('serviceWorker' in navigator && location\.protocol !== 'file:'\) \{\s*window\.addEventListener\('load', \(\) => navigator\.serviceWorker\.register\('\./service-worker\.js'\)\.catch\(console\.warn\)\);\s*\}",
+              "if ('serviceWorker' in navigator) { navigator.serviceWorker.getRegistrations().then(rs=>rs.forEach(r=>r.unregister())).catch(()=>{}); }",
+              s,
+              count=1
+          )
+
+          p.write_text(s, encoding='utf-8')
+
+      - name: Commit loader stabilization
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo 'No changes to commit'
+            exit 0
+          fi
+          git config user.name 'INFO1 stability bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add index.html
+          git commit -m 'stabilize: force fresh non-blocking cloud loader'
+          git push
