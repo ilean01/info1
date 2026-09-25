@@ -33,26 +33,30 @@ jobs:
               else:
                   s = s.replace('</body>', device_tag + '\n</body>', 1)
 
-          old = '''<script>
-if ('serviceWorker' in navigator) { navigator.serviceWorker.getRegistrations().then(rs=>rs.forEach(r=>r.unregister())).catch(()=>{}); }
-</script>'''
-          new = '''<script>
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./service-worker.js?v=network-first-1', { updateViaCache: 'none' })
-      .then(reg => {
-        reg.update().catch(() => {});
-        setInterval(() => reg.update().catch(() => {}), 60000);
-      })
-      .catch(err => console.warn('INFO1 service worker', err));
-  });
-  navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (sessionStorage.getItem('info1-sw-reloaded') === '1') return;
-    sessionStorage.setItem('info1-sw-reloaded', '1');
-    location.reload();
-  });
-}
-</script>'''
+          old = "\n".join([
+              '<script>',
+              "if ('serviceWorker' in navigator) { navigator.serviceWorker.getRegistrations().then(rs=>rs.forEach(r=>r.unregister())).catch(()=>{}); }",
+              '</script>'
+          ])
+          new = "\n".join([
+              '<script>',
+              "if ('serviceWorker' in navigator) {",
+              "  window.addEventListener('load', () => {",
+              "    navigator.serviceWorker.register('./service-worker.js?v=network-first-1', { updateViaCache: 'none' })",
+              "      .then(reg => {",
+              "        reg.update().catch(() => {});",
+              "        setInterval(() => reg.update().catch(() => {}), 60000);",
+              "      })",
+              "      .catch(err => console.warn('INFO1 service worker', err));",
+              "  });",
+              "  navigator.serviceWorker.addEventListener('controllerchange', () => {",
+              "    if (sessionStorage.getItem('info1-sw-reloaded') === '1') return;",
+              "    sessionStorage.setItem('info1-sw-reloaded', '1');",
+              "    location.reload();",
+              "  });",
+              "}",
+              '</script>'
+          ])
 
           if old in s:
               s = s.replace(old, new, 1)
@@ -72,4 +76,5 @@ if ('serviceWorker' in navigator) {
           git config user.email 'actions@users.noreply.github.com'
           git add index.html
           git commit -m 'feat: sync latest INFO1 across desktop and mobile'
+          git pull --rebase origin main
           git push
