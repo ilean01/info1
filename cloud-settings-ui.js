@@ -1,8 +1,10 @@
 (() => {
   'use strict';
+
   const STYLE_ID = 'info1CloudSettingsUiStyles';
   const BTN_ID = 'info1CloudSettingsBtn';
   const BACKDROP_ID = 'info1CloudSettingsBackdrop';
+  let syncTimer = null;
 
   function injectStyles() {
     if (document.getElementById(STYLE_ID)) return;
@@ -10,7 +12,12 @@
     style.id = STYLE_ID;
     style.textContent = `
       #info1CloudBadge{display:none!important}
-      #info1CloudBadge.info1-settings-open{display:block!important;position:fixed!important;top:86px!important;right:22px!important;bottom:auto!important;z-index:10002!important;width:min(560px,calc(100vw - 32px))!important;max-width:min(560px,calc(100vw - 32px))!important;padding:18px!important;border-radius:18px!important;box-shadow:0 24px 80px #000a!important}
+      #info1CloudBadge.info1-settings-open{
+        display:block!important;position:fixed!important;top:86px!important;right:22px!important;
+        bottom:auto!important;z-index:10002!important;width:min(560px,calc(100vw - 32px))!important;
+        max-width:min(560px,calc(100vw - 32px))!important;padding:18px!important;border-radius:18px!important;
+        box-shadow:0 24px 80px #000a!important
+      }
       #info1CloudBadge.info1-settings-open>span{display:block;margin:0 0 10px;font-size:14px;line-height:1.45}
       #info1CloudBadge.info1-settings-open button{margin:6px 6px 0 0!important}
       #info1CloudSettingsBackdrop{position:fixed;inset:0;z-index:10001;background:#02061788;backdrop-filter:blur(4px);display:none}
@@ -27,9 +34,12 @@
   }
 
   function closePanel() {
-    document.getElementById('info1CloudBadge')?.classList.remove('info1-settings-open');
-    document.getElementById(BACKDROP_ID)?.classList.remove('open');
-    document.getElementById(BTN_ID)?.setAttribute('aria-expanded','false');
+    const badge = document.getElementById('info1CloudBadge');
+    const backdrop = document.getElementById(BACKDROP_ID);
+    const btn = document.getElementById(BTN_ID);
+    if (badge?.classList.contains('info1-settings-open')) badge.classList.remove('info1-settings-open');
+    if (backdrop?.classList.contains('open')) backdrop.classList.remove('open');
+    if (btn?.getAttribute('aria-expanded') !== 'false') btn?.setAttribute('aria-expanded','false');
   }
 
   function ensureBackdrop() {
@@ -43,53 +53,80 @@
     return el;
   }
 
-  function updateButtonState() {
-    const btn = document.getElementById(BTN_ID);
-    const badge = document.getElementById('info1CloudBadge');
-    if (!btn) return;
-    btn.classList.remove('cloud-ok','cloud-warn','cloud-bad');
-    if (badge?.classList.contains('ok')) btn.classList.add('cloud-ok');
-    else if (badge?.classList.contains('bad')) btn.classList.add('cloud-bad');
-    else if (badge?.classList.contains('warn')) btn.classList.add('cloud-warn');
-    btn.title = badge?.querySelector('span')?.textContent?.trim() || 'Ajustes de sincronización y nube';
+  function desiredStatusClass(badge) {
+    if (badge?.classList.contains('bad')) return 'cloud-bad';
+    if (badge?.classList.contains('warn')) return 'cloud-warn';
+    if (badge?.classList.contains('ok')) return 'cloud-ok';
+    return '';
   }
 
-  function togglePanel() {
+  function updateButtonState() {
+    const btn = document.getElementById(BTN_ID);
+    if (!btn) return;
+    const badge = document.getElementById('info1CloudBadge');
+    const wanted = desiredStatusClass(badge);
+    const current = ['cloud-ok','cloud-warn','cloud-bad'].find(c => btn.classList.contains(c)) || '';
+    if (current !== wanted) {
+      btn.classList.remove('cloud-ok','cloud-warn','cloud-bad');
+      if (wanted) btn.classList.add(wanted);
+    }
+    const title = badge?.querySelector('span')?.textContent?.trim() || 'Ajustes de sincronización y nube';
+    if (btn.title !== title) btn.title = title;
+  }
+
+  function togglePanel(event) {
+    event?.preventDefault();
+    event?.stopPropagation();
     const badge = document.getElementById('info1CloudBadge');
     if (!badge) return;
-    if (badge.classList.contains('info1-settings-open')) return closePanel();
+    if (badge.classList.contains('info1-settings-open')) {
+      closePanel();
+      return;
+    }
     ensureBackdrop().classList.add('open');
     badge.classList.add('info1-settings-open');
-    document.getElementById(BTN_ID)?.setAttribute('aria-expanded','true');
+    const btn = document.getElementById(BTN_ID);
+    if (btn?.getAttribute('aria-expanded') !== 'true') btn?.setAttribute('aria-expanded','true');
   }
 
   function ensureButton() {
     injectStyles();
-    if (document.getElementById(BTN_ID)) return updateButtonState();
-    const btn = document.createElement('button');
-    btn.id = BTN_ID;
-    btn.type = 'button';
-    btn.setAttribute('aria-expanded','false');
-    btn.setAttribute('aria-controls','info1CloudBadge');
-    btn.innerHTML = '<span class="cloud-dot" aria-hidden="true"></span><span>⚙️ Ajustes</span>';
-    btn.addEventListener('click', togglePanel);
-    const topTabs = document.querySelector('.partial-switcher-tabs');
-    const toolbar = document.querySelector('.toolbar');
-    if (topTabs) topTabs.appendChild(btn);
-    else if (toolbar) toolbar.appendChild(btn);
-    else document.body.prepend(btn);
+    let btn = document.getElementById(BTN_ID);
+    if (!btn) {
+      btn = document.createElement('button');
+      btn.id = BTN_ID;
+      btn.type = 'button';
+      btn.setAttribute('aria-expanded','false');
+      btn.setAttribute('aria-controls','info1CloudBadge');
+      btn.innerHTML = '<span class="cloud-dot" aria-hidden="true"></span><span>⚙️ Ajustes</span>';
+      btn.addEventListener('click', togglePanel);
+      const topTabs = document.querySelector('.partial-switcher-tabs');
+      const toolbar = document.querySelector('.toolbar');
+      if (topTabs) topTabs.appendChild(btn);
+      else if (toolbar) toolbar.appendChild(btn);
+      else document.body.prepend(btn);
+    }
     updateButtonState();
   }
 
   function boot() {
     injectStyles();
-    ensureBackdrop();
     ensureButton();
-    const observer = new MutationObserver(() => { ensureButton(); updateButtonState(); });
-    observer.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['class']});
+    closePanel();
+
+    // No MutationObserver on class attributes: the previous version created
+    // a self-triggering loop that could freeze the whole interface.
+    if (syncTimer) clearInterval(syncTimer);
+    syncTimer = setInterval(() => {
+      ensureButton();
+      updateButtonState();
+    }, 2000);
   }
 
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded',boot,{once:true});
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, {once:true});
   else boot();
-  document.addEventListener('keydown',e=>{if(e.key==='Escape')closePanel();});
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closePanel();
+  });
 })();
