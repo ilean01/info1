@@ -16,7 +16,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Patch legacy runtime in index.html
+      - name: Stabilize GitHub Pages runtime
         shell: python
         run: |
           from pathlib import Path
@@ -25,146 +25,87 @@ jobs:
           p = Path('index.html')
           s = p.read_text(encoding='utf-8')
 
-          media_pattern = re.compile(
-              r'let serverMediaState=null;\s*async function serverMediaAvailable\(\)\{if\(location\.protocol==="file:"\)return false;if\(serverMediaState!==null\)return serverMediaState;try\{const r=await fetch\("/api/health",\{cache:"no-store"\}\);return serverMediaState=r\.ok\}catch\(e\)\{return serverMediaState=false\}\}'
-          )
-          media_new = '''let serverMediaState=null,serverMediaPromise=null;
-          async function serverMediaAvailable(){
-            if(location.protocol==="file:")return false;
-            // On GitHub Pages, never probe the old localhost /api endpoint.
-            // Before the Supabase bridge exists, use IndexedDB. After it loads,
-            // /api/photos is intercepted in-browser and backed by Supabase.
-            if(location.hostname.endsWith("github.io"))return !!window.INFO1_SUPABASE_CLIENT;
-            if(serverMediaState!==null)return serverMediaState;
-            if(serverMediaPromise)return serverMediaPromise;
-            serverMediaPromise=(async()=>{try{const r=await fetch("/api/health",{cache:"no-store"});serverMediaState=r.ok;return serverMediaState}catch(e){serverMediaState=false;return false}finally{serverMediaPromise=null}})();
-            return serverMediaPromise;
-          }'''
-          s, n = media_pattern.subn(media_new, s, count=1)
-          if n != 1:
-              raise SystemExit(f'serverMediaAvailable replacements={n}; refusing unsafe patch')
+          marker = 'INFO1_GITHUB_NETWORK_GUARD_V13'
+          if marker not in s:
+              guard = r'''<script>
+          /* INFO1_GITHUB_NETWORK_GUARD_V13 */
+          (() => {
+            if (!location.hostname.endsWith('github.io')) return;
+            const realFetch = window.fetch.bind(window);
+            window.__INFO1_REAL_FETCH__ = realFetch;
+            const json = (data, status=200) => new Response(JSON.stringify(data), {
+              status,
+              headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}
+            });
+            window.fetch = async function(input, init={}) {
+              let url;
+              try { url = new URL(typeof input === 'string' ? input : input?.url, location.href); }
+              catch { return realFetch(input, init); }
+              if (url.origin === location.origin && url.pathname.startsWith('/api/')) {
+                const method = String(init?.method || input?.method || 'GET').toUpperCase();
+                if (url.pathname === '/api/health') return json({ok:false,mode:'github-pages-no-legacy-api'},503);
+                if (url.pathname === '/api/photos' && method === 'GET') return json([]);
+                if (url.pathname.startsWith('/api/photos')) return json({error:'Legacy photo API disabled on GitHub Pages'},503);
+                if (url.pathname === '/api/state' && method === 'POST') return json({revision:Date.now(),savedAt:new Date().toISOString(),provider:'supabase'},200);
+                if (url.pathname === '/api/state/history' && method === 'GET') return json({versions:[]},200);
+                if (url.pathname === '/api/state' && method === 'GET') return json({error:'Legacy state API disabled'},404);
+                return json({error:'Legacy API disabled'},404);
+              }
+              return realFetch(input, init);
+            };
+            if ('serviceWorker' in navigator) {
+              navigator.serviceWorker.getRegistrations().then(rs => Promise.all(rs.map(r => r.unregister()))).catch(()=>{});
+            }
+            if (window.caches?.keys) {
+              window.caches.keys().then(keys => Promise.all(keys.map(k => window.caches.delete(k)))).catch(()=>{});
+            }
+          })();
+          </script>'''
+              s = s.replace('<head>', '<head>\n' + guard, 1)
 
-          flush_pattern = re.compile(
-              r'async function flushStudyState\(\)\{\s*if\(syncBusy\|\|!syncDirty\|\|syncBlocked\)return;'
+          # Never probe or use the old media HTTP API on GitHub Pages. The app
+          # falls back to IndexedDB for photos while state sync continues via Supabase.
+          s = re.sub(
+              r'if\(location\.hostname\.endsWith\("github\.io"\)\)return !!window\.INFO1_SUPABASE_CLIENT;',
+              'if(location.hostname.endsWith("github.io"))return false;',
+              s
           )
-          flush_new = '''async function flushStudyState(){
-            if(syncBusy||!syncDirty||syncBlocked)return;
-            // GitHub Pages has no local persistence server. Supabase handles
-            // synchronization through cloud-sync.js, so never call /api/state.
-            if(location.hostname.endsWith("github.io")){
-              syncDirty=false;
-              v14LastSyncStatus=' · Supabase activo';
-              renderPersistStatus();
-              return;
-            }'''
-          s, n = flush_pattern.subn(flush_new, s, count=1)
-          if n != 1:
-              raise SystemExit(f'flushStudyState replacements={n}; refusing unsafe patch')
 
-          # Use repo-root absolute PDF links. This prevents relative URL nesting
-          # such as /materiales/materiales/materiales/... on nested documents.
-          for name in ('05_PDA.pdf','examenes_merged.pdf','Hopcroft_referencia.pdf'):
-              s = re.sub(r'(?<!/info1/)materiales/' + re.escape(name), '/info1/materiales/' + name, s)
+          # Do not auto-load PDFs that are not in the repository yet. Automatic
+          # PDF loads were generating repeated 404/429 traffic and confusing Chrome.
+          s = s.replace('src="/info1/materiales/05_PDA.pdf#page=1"', 'src="about:blank" data-src="/info1/materiales/05_PDA.pdf#page=1"')
+          s = s.replace('src="/info1/materiales/examenes_merged.pdf#page=1"', 'src="about:blank" data-src="/info1/materiales/examenes_merged.pdf#page=1"')
+
+          # Stop the page from registering a service worker while the migration is
+          # stabilised. The early guard above also unregisters any old installation.
+          s = re.sub(
+              r"if \('serviceWorker' in navigator && location\.protocol !== 'file:'\) \{\s*window\.addEventListener\('load', \(\) => navigator\.serviceWorker\.register\('\./service-worker\.js'\)\.catch\(console\.warn\)\);\s*\}",
+              "if ('serviceWorker' in navigator) { navigator.serviceWorker.getRegistrations().then(rs=>rs.forEach(r=>r.unregister())).catch(()=>{}); }",
+              s,
+              count=1
+          )
 
           p.write_text(s, encoding='utf-8')
 
-      - name: Replace service worker with strict app-shell routing
+      - name: Install service-worker kill switch
         shell: bash
         run: |
           cat > service-worker.js <<'EOF'
-          const CACHE = 'info1-pwa-v11';
-          const VERSION = '11';
-          const CORE = [
-            './index.html',
-            './manifest.webmanifest',
-            './supabase-config.js',
-            './cloud-sync.js',
-            './supabase-media-bridge.js',
-            './icons/icon-192.png',
-            './icons/icon-512.png'
-          ];
-
-          const SCOPE_PATH = new URL(self.registration.scope).pathname;
-          const APP_PATH = SCOPE_PATH.endsWith('/') ? SCOPE_PATH : SCOPE_PATH + '/';
-          const APP_ROOT = APP_PATH.replace(/\/$/, '');
-
-          function isAppShellNavigation(url) {
-            return url.pathname === APP_PATH ||
-                   url.pathname === APP_ROOT ||
-                   url.pathname === APP_PATH + 'index.html';
-          }
-
-          async function refreshCore() {
-            const cache = await caches.open(CACHE);
-            for (const path of CORE) {
-              try {
-                const sep = path.includes('?') ? '&' : '?';
-                const response = await fetch(`${path}${sep}__info1_sw=${VERSION}`, { cache: 'reload' });
-                if (response && response.ok) await cache.put(path, response.clone());
-              } catch (_) {}
-            }
-          }
-
-          self.addEventListener('install', event => {
-            event.waitUntil(refreshCore().then(() => self.skipWaiting()));
-          });
-
+          self.addEventListener('install', event => event.waitUntil(self.skipWaiting()));
           self.addEventListener('activate', event => {
             event.waitUntil((async () => {
-              const keys = await caches.keys();
-              await Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key)));
-              await self.clients.claim();
-            })());
-          });
-
-          self.addEventListener('fetch', event => {
-            const request = event.request;
-            if (request.method !== 'GET') return;
-            const url = new URL(request.url);
-            if (url.origin !== self.location.origin) return;
-
-            // Only /info1/ itself is an app-shell navigation. Never return
-            // index.html for PDFs or other nested resources.
-            if (request.mode === 'navigate') {
-              if (!isAppShellNavigation(url)) return;
-              event.respondWith((async () => {
-                const cached = await caches.match('./index.html');
-                if (cached) return cached;
-                try {
-                  const response = await fetch('./index.html', { cache: 'no-store' });
-                  if (response && response.ok) {
-                    const cache = await caches.open(CACHE);
-                    await cache.put('./index.html', response.clone());
-                  }
-                  return response;
-                } catch (_) {
-                  return new Response(
-                    '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>INFO 1 sin conexión</title><body style="font-family:system-ui;background:#09101f;color:#eef4ff;padding:32px"><h1>INFO 1</h1><p>No se pudo abrir la aplicación. Conectate una vez a internet y volvé a intentar.</p></body>',
-                    { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
-                  );
-                }
-              })());
-              return;
-            }
-
-            event.respondWith((async () => {
-              const cached = await caches.match(request);
-              if (cached) return cached;
               try {
-                const response = await fetch(request);
-                if (response && response.ok && response.type === 'basic') {
-                  const cache = await caches.open(CACHE);
-                  await cache.put(request, response.clone());
-                }
-                return response;
-              } catch (_) {
-                return new Response('', { status: 503 });
-              }
+                const keys = await caches.keys();
+                await Promise.all(keys.map(k => caches.delete(k)));
+              } catch (_) {}
+              try { await self.registration.unregister(); } catch (_) {}
+              try { await self.clients.claim(); } catch (_) {}
             })());
           });
+          // No fetch handler on purpose. GitHub Pages serves INFO1 directly.
           EOF
 
-      - name: Commit hotfix
+      - name: Commit stability hotfix
         shell: bash
         run: |
           if git diff --quiet; then
@@ -174,5 +115,5 @@ jobs:
           git config user.name 'INFO1 hotfix bot'
           git config user.email 'actions@users.noreply.github.com'
           git add index.html service-worker.js
-          git commit -m 'fix: stop request storm and PDF route recursion'
+          git commit -m 'fix: disable legacy API storm and stale service worker'
           git push
