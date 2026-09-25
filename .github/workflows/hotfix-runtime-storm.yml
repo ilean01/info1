@@ -1,0 +1,175 @@
+name: INFO1 runtime hotfix
+
+on:
+  push:
+    paths:
+      - '.github/workflows/hotfix-runtime-storm.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch legacy runtime in index.html
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('index.html')
+          s = p.read_text(encoding='utf-8')
+
+          old = '''let serverMediaState=null;
+          async function serverMediaAvailable(){if(location.protocol==="file:")return false;if(serverMediaState!==null)return serverMediaState;try{const r=await fetch("/api/health",{cache:"no-store"});return serverMediaState=r.ok}catch(e){return serverMediaState=false}}'''
+          new = '''let serverMediaState=null,serverMediaPromise=null;
+          async function serverMediaAvailable(){
+            if(location.protocol==="file:")return false;
+            // GitHub Pages has no /api server. Before the Supabase bridge loads,
+            // use IndexedDB without making any network request. Once the bridge
+            // exists, /api/photos is handled in-browser and can use Supabase.
+            if(location.hostname.endsWith("github.io"))return !!window.INFO1_SUPABASE_CLIENT;
+            if(serverMediaState!==null)return serverMediaState;
+            if(serverMediaPromise)return serverMediaPromise;
+            serverMediaPromise=(async()=>{try{const r=await fetch("/api/health",{cache:"no-store"});serverMediaState=r.ok;return serverMediaState}catch(e){serverMediaState=false;return false}finally{serverMediaPromise=null}})();
+            return serverMediaPromise;
+          }'''
+          if old not in s:
+              raise SystemExit('serverMediaAvailable block not found; refusing unsafe patch')
+          s = s.replace(old, new, 1)
+
+          old_flush = '''async function flushStudyState(){
+            if(syncBusy||!syncDirty||syncBlocked)return;'''
+          new_flush = '''async function flushStudyState(){
+            if(syncBusy||!syncDirty||syncBlocked)return;
+            // The old localhost persistence endpoint does not exist on GitHub Pages.
+            // cloud-sync.js is the authoritative Supabase synchronizer there.
+            if(location.hostname.endsWith("github.io")){
+              syncDirty=false;
+              v14LastSyncStatus=' · Supabase activo';
+              renderPersistStatus();
+              return;
+            }'''
+          if old_flush not in s:
+              raise SystemExit('flushStudyState block not found; refusing unsafe patch')
+          s = s.replace(old_flush, new_flush, 1)
+
+          # Make material links repo-root absolute so they never accumulate
+          # /materiales/materiales/... when opened from a nested URL.
+          for name in ('05_PDA.pdf','examenes_merged.pdf','Hopcroft_referencia.pdf'):
+              s = s.replace(f'materiales/{name}', f'/info1/materiales/{name}')
+              s = s.replace(f'/info1//info1/materiales/{name}', f'/info1/materiales/{name}')
+
+          p.write_text(s, encoding='utf-8')
+
+      - name: Replace service worker with strict app-shell routing
+        shell: bash
+        run: |
+          cat > service-worker.js <<'EOF'
+          const CACHE = 'info1-pwa-v11';
+          const VERSION = '11';
+          const CORE = [
+            './index.html',
+            './manifest.webmanifest',
+            './supabase-config.js',
+            './cloud-sync.js',
+            './supabase-media-bridge.js',
+            './icons/icon-192.png',
+            './icons/icon-512.png'
+          ];
+
+          const SCOPE_PATH = new URL(self.registration.scope).pathname;
+          const APP_PATH = SCOPE_PATH.endsWith('/') ? SCOPE_PATH : SCOPE_PATH + '/';
+          const APP_ROOT = APP_PATH.replace(/\/$/, '');
+
+          function isAppShellNavigation(url) {
+            return url.pathname === APP_PATH ||
+                   url.pathname === APP_ROOT ||
+                   url.pathname === APP_PATH + 'index.html';
+          }
+
+          async function refreshCore() {
+            const cache = await caches.open(CACHE);
+            for (const path of CORE) {
+              try {
+                const sep = path.includes('?') ? '&' : '?';
+                const response = await fetch(`${path}${sep}__info1_sw=${VERSION}`, { cache: 'reload' });
+                if (response && response.ok) await cache.put(path, response.clone());
+              } catch (_) {}
+            }
+          }
+
+          self.addEventListener('install', event => {
+            event.waitUntil(refreshCore().then(() => self.skipWaiting()));
+          });
+
+          self.addEventListener('activate', event => {
+            event.waitUntil((async () => {
+              const keys = await caches.keys();
+              await Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key)));
+              await self.clients.claim();
+            })());
+          });
+
+          self.addEventListener('fetch', event => {
+            const request = event.request;
+            if (request.method !== 'GET') return;
+            const url = new URL(request.url);
+            if (url.origin !== self.location.origin) return;
+
+            // CRITICAL: only the actual INFO1 root gets the SPA shell.
+            // PDFs and every other nested URL must go to the network normally.
+            if (request.mode === 'navigate') {
+              if (!isAppShellNavigation(url)) return;
+              event.respondWith((async () => {
+                const cached = await caches.match('./index.html');
+                if (cached) return cached;
+                try {
+                  const response = await fetch('./index.html', { cache: 'no-store' });
+                  if (response && response.ok) {
+                    const cache = await caches.open(CACHE);
+                    await cache.put('./index.html', response.clone());
+                  }
+                  return response;
+                } catch (_) {
+                  return new Response(
+                    '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>INFO 1 sin conexión</title><body style="font-family:system-ui;background:#09101f;color:#eef4ff;padding:32px"><h1>INFO 1</h1><p>No se pudo abrir la aplicación. Conectate una vez a internet y volvé a intentar.</p></body>',
+                    { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+                  );
+                }
+              })());
+              return;
+            }
+
+            event.respondWith((async () => {
+              const cached = await caches.match(request);
+              if (cached) return cached;
+              try {
+                const response = await fetch(request);
+                if (response && response.ok && response.type === 'basic') {
+                  const cache = await caches.open(CACHE);
+                  await cache.put(request, response.clone());
+                }
+                return response;
+              } catch (_) {
+                return new Response('', { status: 503 });
+              }
+            })());
+          });
+          EOF
+
+      - name: Commit hotfix
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo 'No changes to commit'
+            exit 0
+          fi
+          git config user.name 'INFO1 hotfix bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add index.html service-worker.js
+          git commit -m 'fix: stop request storm and PDF route recursion'
+          git push
