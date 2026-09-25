@@ -25,12 +25,14 @@ jobs:
           s = p.read_text(encoding='utf-8')
           tag = '<script src="./cloud-settings-ui.js?v=20260925-1"></script>'
           if tag not in s:
-              anchor = '<script src="./cloud-sync.js?v=stable-20260925-2"></script>'
-              if anchor not in s:
-                  anchor = '<script src="./cloud-sync.js?v=settings-20260925-1"></script>'
-              if anchor not in s:
-                  anchor = '<script src="./cloud-sync.js"></script>'
-              if anchor not in s:
+              anchors = [
+                  '<script src="./cloud-sync.js?v=stable-20260925-3"></script>',
+                  '<script src="./cloud-sync.js?v=stable-20260925-2"></script>',
+                  '<script src="./cloud-sync.js?v=settings-20260925-1"></script>',
+                  '<script src="./cloud-sync.js"></script>'
+              ]
+              anchor = next((a for a in anchors if a in s), None)
+              if not anchor:
                   raise SystemExit('cloud-sync script tag not found')
               s = s.replace(anchor, anchor + '\n' + tag, 1)
           p.write_text(s, encoding='utf-8')
