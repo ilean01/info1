@@ -1,0 +1,96 @@
+name: INFO1 auto ficha timer
+
+on:
+  push:
+    paths:
+      - '.github/workflows/auto-ficha-timer.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Make ficha timer automatic while preserving manual controls
+        shell: python
+        run: |
+          from pathlib import Path
+
+          p = Path('index.html')
+          s = p.read_text(encoding='utf-8')
+          marker = 'INFO1_AUTO_FICHA_TIMER_V1'
+          if marker in s:
+              raise SystemExit(0)
+
+          old = 'function finishActiveCrono(){const c=activeCrono();if(!c)return false;const elapsed=Math.max(0,Date.now()-new Date(c.inicio).getTime());appendSession(c.id,c.inicio,elapsed);delete state.__crono;save();return true;}\nfunction startTimer(id)'
+          new = '''function finishActiveCrono(){const c=activeCrono();if(!c)return false;const elapsed=Math.max(0,Date.now()-new Date(c.inicio).getTime());appendSession(c.id,c.inicio,elapsed);delete state.__crono;save();return true;}
+/* INFO1_AUTO_FICHA_TIMER_V1: al abrir una ficha empieza automáticamente; al cerrarla se detiene. */
+function beginFichaTimer(id){
+  const c=activeCrono();
+  if(c&&c.id===id){ensureCronoTicker();return false;}
+  if(c&&c.id!==id)finishActiveCrono();
+  state.__crono={id,inicio:new Date().toISOString(),source:"ficha-auto"};
+  save();ensureCronoTicker();return true;
+}
+function stopFichaTimer(id){
+  const c=activeCrono();
+  if(!c||c.id!==id)return false;
+  return finishActiveCrono();
+}
+function startTimer(id)'''
+          if old not in s:
+              raise SystemExit('timer anchor not found')
+          s = s.replace(old, new, 1)
+
+          old = 'function openModal(si,ii){\n  currentEdit={si,ii,id:idFor(si,ii)};\n  const item=data[si].items[ii],s=getItemState(currentEdit.id);'
+          new = 'function openModal(si,ii){\n  currentEdit={si,ii,id:idFor(si,ii)};\n  beginFichaTimer(currentEdit.id);\n  const item=data[si].items[ii],s=getItemState(currentEdit.id);'
+          if old not in s:
+              raise SystemExit('openModal anchor not found')
+          s = s.replace(old, new, 1)
+
+          old = 'function closeModal(){document.getElementById("modalBack").classList.remove("show");currentEdit=null;}'
+          new = '''function closeModal(){
+  const id=currentEdit?.id;
+  const stopped=id?stopFichaTimer(id):false;
+  document.getElementById("modalBack").classList.remove("show");
+  currentEdit=null;
+  if(stopped)renderAll();
+}'''
+          if old not in s:
+              raise SystemExit('closeModal anchor not found')
+          s = s.replace(old, new, 1)
+
+          old = 'Las sesiones se agrupan por <b>fecha local</b>, no por UTC.'
+          # Leave the dashboard wording intact; only patch the modal session explanation below.
+
+          modal_old = 'El tiempo se calcula usando la diferencia real entre inicio y fin. Las sesiones menores a 15 segundos se descartan.'
+          modal_new = 'El tiempo empieza automáticamente al abrir esta ficha y se detiene al salir. También podés pausarlo o reanudarlo con el botón, y agregar tiempo a mano. Las sesiones menores a 15 segundos se descartan.'
+          if modal_old in s:
+              s = s.replace(modal_old, modal_new, 1)
+
+          # If the tab/window is closed while a ficha is open, close that automatic session too.
+          hook = '''\nwindow.addEventListener("pagehide",()=>{\n  const id=currentEdit?.id;\n  if(id&&activeCrono()?.id===id)stopFichaTimer(id);\n});\n'''
+          anchor = 'function saveModal(){'
+          if anchor not in s:
+              raise SystemExit('saveModal anchor not found')
+          s = s.replace(anchor, hook + '\n' + anchor, 1)
+
+          p.write_text(s, encoding='utf-8')
+
+      - name: Commit automatic ficha timer
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo 'No changes to commit'
+            exit 0
+          fi
+          git config user.name 'INFO1 timer bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add index.html
+          git commit -m 'feat: auto-track study time while ficha is open'
+          git push
