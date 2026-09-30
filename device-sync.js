@@ -65,7 +65,7 @@
     }
   }
 
-  async function pullLatestAndReload(reason = 'nube', force = false) {
+  async function pullLatest(reason = 'nube', force = false) {
     if (manualPullBusy || reloadQueued) return false;
     const cloud = window.INFO1_CLOUD;
     if (!cloud?.pull || !cloud?.status?.connected) return false;
@@ -73,15 +73,29 @@
 
     manualPullBusy = true;
     setPullButtonBusy(true);
-    const before = cloudContext().hydratedRevision;
+
+    const targetRevision = Number(cloud.status?.revision || 0);
+    const beforeHydrated = cloudContext().hydratedRevision;
+    const alreadyHydrated = targetRevision > 0 && beforeHydrated === targetRevision && localStorage.getItem(UNSYNCED_KEY) !== '1';
 
     try {
       await cloud.pull();
       await wait(120);
 
       const status = window.INFO1_CLOUD?.status;
-      const after = cloudContext().hydratedRevision;
-      if (!status?.conflict && (after >= before || force)) {
+      const afterHydrated = cloudContext().hydratedRevision;
+      if (status?.conflict) return false;
+
+      // Caso clave: si esta revisión ya fue cargada antes, el aviso reapareció
+      // sólo porque el arranque normalizó algún dato local. cloud.pull() ya
+      // limpió el conflicto interno; NO recargamos otra vez porque eso recrearía
+      // el mismo aviso en bucle.
+      if (alreadyHydrated && afterHydrated === targetRevision) {
+        console.info('INFO1: conflicto falso resuelto sin recarga', targetRevision);
+        return true;
+      }
+
+      if (afterHydrated > 0) {
         reloadFor(reason);
         return true;
       }
@@ -96,14 +110,14 @@
   }
 
   // El botón "Cargar nube" debe funcionar siempre. Lo capturamos antes del
-  // onclick viejo para aplicar la nube y refrescar la interfaz en un solo paso.
+  // onclick viejo para que una única pulsación resuelva el conflicto completo.
   document.addEventListener('click', event => {
     const btn = event.target?.closest?.('#info1PullCloud');
     if (!btn) return;
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
-    pullLatestAndReload('carga manual de nube', true);
+    pullLatest('carga manual de nube', true);
   }, true);
 
   async function syncLatestData() {
@@ -114,10 +128,8 @@
     const ctx = cloudContext();
     if (!ctx.connected || !ctx.workspaceId || !sb || !cloud?.pull) return;
 
-    // Si ya sabemos que la nube difiere y este dispositivo no tiene cambios
-    // pendientes, la nube es la copia más nueva y se aplica automáticamente.
     if (cloud.status?.conflict && !hasLocalWorkInProgress()) {
-      await pullLatestAndReload('resolver conflicto con la nube');
+      await pullLatest('resolver conflicto con la nube');
       return;
     }
 
@@ -135,7 +147,7 @@
       const remoteRev = Number(result.data.revision || 0);
       const localRev = Number(cloudContext().hydratedRevision || 0);
       if (remoteRev > localRev && !hasLocalWorkInProgress()) {
-        await pullLatestAndReload(`datos rev ${remoteRev}`);
+        await pullLatest(`datos rev ${remoteRev}`);
       }
     } catch (e) {
       console.warn('INFO1 cross-device data sync:', e);
