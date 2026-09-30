@@ -11,6 +11,7 @@
   let versionBusy = false;
   let reloadQueued = false;
   let manualPullBusy = false;
+  let userTouched = false;
 
   function parse(raw, fallback = null) {
     try { return raw ? JSON.parse(raw) : fallback; } catch { return fallback; }
@@ -24,12 +25,15 @@
     return parse(localStorage.getItem(STATE_KEY), {}) || {};
   }
 
-  function hasLocalWorkInProgress() {
-    const cloud = window.INFO1_CLOUD?.status;
-    if (cloud?.dirty) return true;
-    if (localStorage.getItem(UNSYNCED_KEY) === '1') return true;
+  function hasActiveChrono() {
     const st = localState();
     return !!(st?.__crono?.id && st?.__crono?.inicio);
+  }
+
+  function hasLocalWorkInProgress() {
+    const cloud = window.INFO1_CLOUD?.status;
+    const pending = cloud?.dirty || localStorage.getItem(UNSYNCED_KEY) === '1';
+    return hasActiveChrono() || (userTouched && !!pending);
   }
 
   function cloudContext() {
@@ -76,22 +80,24 @@
 
     const targetRevision = Number(cloud.status?.revision || 0);
     const beforeHydrated = cloudContext().hydratedRevision;
-    const alreadyHydrated = targetRevision > 0 && beforeHydrated === targetRevision && localStorage.getItem(UNSYNCED_KEY) !== '1';
+    const falseStartupConflict = targetRevision > 0 && beforeHydrated === targetRevision && !userTouched && !hasActiveChrono();
+
+    // Si el único "cambio" nació durante el arranque automático de la app,
+    // no lo tratamos como edición de la persona. Así evitamos el cartel eterno.
+    if (falseStartupConflict) {
+      localStorage.removeItem(UNSYNCED_KEY);
+    }
 
     try {
       await cloud.pull();
-      await wait(120);
+      await wait(140);
 
       const status = window.INFO1_CLOUD?.status;
       const afterHydrated = cloudContext().hydratedRevision;
       if (status?.conflict) return false;
 
-      // Caso clave: si esta revisión ya fue cargada antes, el aviso reapareció
-      // sólo porque el arranque normalizó algún dato local. cloud.pull() ya
-      // limpió el conflicto interno; NO recargamos otra vez porque eso recrearía
-      // el mismo aviso en bucle.
-      if (alreadyHydrated && afterHydrated === targetRevision) {
-        console.info('INFO1: conflicto falso resuelto sin recarga', targetRevision);
+      if (falseStartupConflict && afterHydrated === targetRevision) {
+        console.info('INFO1: conflicto de arranque resuelto sin recarga', targetRevision);
         return true;
       }
 
@@ -109,8 +115,17 @@
     }
   }
 
-  // El botón "Cargar nube" debe funcionar siempre. Lo capturamos antes del
-  // onclick viejo para que una única pulsación resuelva el conflicto completo.
+  // Registrar interacción real. Cambios automáticos del arranque no cuentan.
+  const markTouched = event => {
+    if (event?.isTrusted === false) return;
+    userTouched = true;
+  };
+  document.addEventListener('pointerdown', markTouched, true);
+  document.addEventListener('keydown', markTouched, true);
+  document.addEventListener('input', markTouched, true);
+  document.addEventListener('change', markTouched, true);
+
+  // "Cargar nube" sigue disponible manualmente, pero normalmente no hará falta.
   document.addEventListener('click', event => {
     const btn = event.target?.closest?.('#info1PullCloud');
     if (!btn) return;
@@ -128,8 +143,21 @@
     const ctx = cloudContext();
     if (!ctx.connected || !ctx.workspaceId || !sb || !cloud?.pull) return;
 
+    const remoteKnown = Number(cloud.status?.revision || 0);
+    const hydrated = Number(ctx.hydratedRevision || 0);
+
+    // 1) Mismo rev + sin interacción humana: no es conflicto real; suele ser
+    // normalización de la app al arrancar. Se limpia solo y sin cartel manual.
+    if (cloud.status?.conflict && remoteKnown > 0 && remoteKnown === hydrated && !userTouched && !hasActiveChrono()) {
+      localStorage.removeItem(UNSYNCED_KEY);
+      await pullLatest('resolver normalización de arranque', true);
+      return;
+    }
+
+    // 2) Si otro dispositivo avanzó la nube y acá no hay trabajo real, se trae
+    // automáticamente. Esto mantiene notebook y celular en la última revisión.
     if (cloud.status?.conflict && !hasLocalWorkInProgress()) {
-      await pullLatest('resolver conflicto con la nube');
+      await pullLatest('resolver cambios de otro dispositivo', true);
       return;
     }
 
@@ -147,7 +175,7 @@
       const remoteRev = Number(result.data.revision || 0);
       const localRev = Number(cloudContext().hydratedRevision || 0);
       if (remoteRev > localRev && !hasLocalWorkInProgress()) {
-        await pullLatest(`datos rev ${remoteRev}`);
+        await pullLatest(`datos rev ${remoteRev}`, true);
       }
     } catch (e) {
       console.warn('INFO1 cross-device data sync:', e);
@@ -198,7 +226,7 @@
     if (!document.hidden) setTimeout(syncEverything, 250);
   });
 
-  setInterval(syncLatestData, 10000);
+  setInterval(syncLatestData, 7000);
   setInterval(checkLatestApp, 45000);
-  setTimeout(syncEverything, 1800);
+  setTimeout(syncEverything, 1200);
 })();
