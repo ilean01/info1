@@ -10,9 +10,14 @@
   let dataBusy = false;
   let versionBusy = false;
   let reloadQueued = false;
+  let manualPullBusy = false;
 
   function parse(raw, fallback = null) {
     try { return raw ? JSON.parse(raw) : fallback; } catch { return fallback; }
+  }
+
+  function wait(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   function localState() {
@@ -30,10 +35,11 @@
   function cloudContext() {
     const ctx = parse(localStorage.getItem(CLOUD_CTX_KEY), {});
     const status = window.INFO1_CLOUD?.status;
+    const workspaceId = ctx?.workspaceId || status?.workspaceId || null;
     return {
-      workspaceId: ctx?.workspaceId || status?.workspaceId || null,
+      workspaceId,
       connected: !!status?.connected,
-      hydratedRevision: Number(localStorage.getItem(`info1-cloud-hydrated:${ctx?.workspaceId || status?.workspaceId || ''}`) || 0)
+      hydratedRevision: Number(localStorage.getItem(`info1-cloud-hydrated:${workspaceId || ''}`) || 0)
     };
   }
 
@@ -43,15 +49,79 @@
     const url = new URL(location.href);
     url.searchParams.set('_info1sync', Date.now().toString());
     console.info('INFO1 sync reload:', reason);
-    setTimeout(() => location.replace(url.toString()), 120);
+    setTimeout(() => location.replace(url.toString()), 180);
   }
 
+  function setPullButtonBusy(busy) {
+    const btn = document.getElementById('info1PullCloud');
+    if (!btn) return;
+    if (busy) {
+      if (!btn.dataset.originalText) btn.dataset.originalText = btn.textContent || 'Cargar nube';
+      btn.disabled = true;
+      btn.textContent = 'Actualizando…';
+    } else {
+      btn.disabled = false;
+      if (btn.dataset.originalText) btn.textContent = btn.dataset.originalText;
+    }
+  }
+
+  async function pullLatestAndReload(reason = 'nube', force = false) {
+    if (manualPullBusy || reloadQueued) return false;
+    const cloud = window.INFO1_CLOUD;
+    if (!cloud?.pull || !cloud?.status?.connected) return false;
+    if (!force && hasLocalWorkInProgress()) return false;
+
+    manualPullBusy = true;
+    setPullButtonBusy(true);
+    const before = cloudContext().hydratedRevision;
+
+    try {
+      await cloud.pull();
+      await wait(120);
+
+      const status = window.INFO1_CLOUD?.status;
+      const after = cloudContext().hydratedRevision;
+      if (!status?.conflict && (after >= before || force)) {
+        reloadFor(reason);
+        return true;
+      }
+      return false;
+    } catch (e) {
+      console.warn('INFO1 pull latest:', e);
+      return false;
+    } finally {
+      manualPullBusy = false;
+      setPullButtonBusy(false);
+    }
+  }
+
+  // El botón "Cargar nube" debe funcionar siempre. Lo capturamos antes del
+  // onclick viejo para aplicar la nube y refrescar la interfaz en un solo paso.
+  document.addEventListener('click', event => {
+    const btn = event.target?.closest?.('#info1PullCloud');
+    if (!btn) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    pullLatestAndReload('carga manual de nube', true);
+  }, true);
+
   async function syncLatestData() {
-    if (dataBusy || document.hidden || hasLocalWorkInProgress()) return;
+    if (dataBusy || document.hidden || reloadQueued) return;
+
     const cloud = window.INFO1_CLOUD;
     const sb = window.INFO1_SUPABASE_CLIENT;
     const ctx = cloudContext();
     if (!ctx.connected || !ctx.workspaceId || !sb || !cloud?.pull) return;
+
+    // Si ya sabemos que la nube difiere y este dispositivo no tiene cambios
+    // pendientes, la nube es la copia más nueva y se aplica automáticamente.
+    if (cloud.status?.conflict && !hasLocalWorkInProgress()) {
+      await pullLatestAndReload('resolver conflicto con la nube');
+      return;
+    }
+
+    if (hasLocalWorkInProgress()) return;
 
     dataBusy = true;
     try {
@@ -63,12 +133,9 @@
       if (result.error || !result.data) return;
 
       const remoteRev = Number(result.data.revision || 0);
-      const currentCtx = cloudContext();
-      const localRev = Number(currentCtx.hydratedRevision || 0);
+      const localRev = Number(cloudContext().hydratedRevision || 0);
       if (remoteRev > localRev && !hasLocalWorkInProgress()) {
-        await cloud.pull();
-        const after = cloudContext();
-        if (Number(after.hydratedRevision || 0) >= remoteRev) reloadFor(`datos rev ${remoteRev}`);
+        await pullLatestAndReload(`datos rev ${remoteRev}`);
       }
     } catch (e) {
       console.warn('INFO1 cross-device data sync:', e);
@@ -78,7 +145,7 @@
   }
 
   async function checkLatestApp() {
-    if (versionBusy || document.hidden || hasLocalWorkInProgress()) return;
+    if (versionBusy || document.hidden || hasLocalWorkInProgress() || reloadQueued) return;
     versionBusy = true;
     try {
       const r = await fetch(`${RELEASE_URL}?t=${Date.now()}`, { cache: 'no-store' });
@@ -86,11 +153,13 @@
       const info = await r.json();
       const release = String(info?.release || info?.sha || '').trim();
       if (!release) return;
+
       const seen = localStorage.getItem(RELEASE_KEY);
       if (!seen) {
         localStorage.setItem(RELEASE_KEY, release);
         return;
       }
+
       if (seen !== release && !hasLocalWorkInProgress()) {
         localStorage.setItem(RELEASE_KEY, release);
         try {
@@ -117,7 +186,7 @@
     if (!document.hidden) setTimeout(syncEverything, 250);
   });
 
-  setInterval(syncLatestData, 15000);
-  setInterval(checkLatestApp, 60000);
-  setTimeout(syncEverything, 2500);
+  setInterval(syncLatestData, 10000);
+  setInterval(checkLatestApp, 45000);
+  setTimeout(syncEverything, 1800);
 })();
