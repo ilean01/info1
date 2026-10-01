@@ -1168,21 +1168,21 @@ function makeCardOpenable(el,si,ii){el.tabIndex=0;el.setAttribute("role","button
 let cronoTicker=null;
 function activeCrono(){return state.__crono&&state.__crono.id&&state.__crono.inicio?state.__crono:null;}
 function appendSession(id,inicio,ms){if(ms<15000)return false;getItemState(id).sesiones.push({inicio,ms:Math.round(ms)});return true;}
-function finishActiveCrono(){const c=activeCrono();if(!c)return false;const elapsed=Math.max(0,Date.now()-new Date(c.inicio).getTime());appendSession(c.id,c.inicio,elapsed);delete state.__crono;save();return true;}
+function finishActiveCrono(){const c=activeCrono();if(!c)return false;const elapsed=Math.max(0,Date.now()-new Date(c.inicio).getTime());appendSession(c.id,c.inicio,elapsed);delete state.__crono;save();window.INFO1_DEVICE_SYNC?.publishSharedTimer?.();return true;}
 /* INFO1_AUTO_FICHA_TIMER_V1: al abrir una ficha empieza automáticamente; al cerrarla se detiene. */
 function beginFichaTimer(id){
   const c=activeCrono();
   if(c&&c.id===id){ensureCronoTicker();return false;}
   if(c&&c.id!==id)finishActiveCrono();
   state.__crono={id,inicio:new Date().toISOString(),source:"ficha-auto"};
-  save();ensureCronoTicker();return true;
+  save();window.INFO1_DEVICE_SYNC?.publishSharedTimer?.();ensureCronoTicker();return true;
 }
 function stopFichaTimer(id){
   const c=activeCrono();
   if(!c||c.id!==id)return false;
   return finishActiveCrono();
 }
-function startTimer(id){const c=activeCrono();if(c&&c.id===id){finishActiveCrono();renderAll();return}if(c&&c.id!==id){if(!confirm(`Ya hay un cronómetro corriendo en “${topicTitle(c.id)}”. ¿Querés terminarlo y empezar este?`))return;finishActiveCrono();}state.__crono={id,inicio:new Date().toISOString()};save();ensureCronoTicker();renderAll();}
+function startTimer(id){const c=activeCrono();if(c&&c.id===id){finishActiveCrono();renderAll();return}if(c&&c.id!==id){if(!confirm(`Ya hay un cronómetro corriendo en “${topicTitle(c.id)}”. ¿Querés terminarlo y empezar este?`))return;finishActiveCrono();}state.__crono={id,inicio:new Date().toISOString()};save();window.INFO1_DEVICE_SYNC?.publishSharedTimer?.();ensureCronoTicker();renderAll();}
 function timerLineHtml(id,s){const running=activeCrono()?.id===id;return `<div class="study-line"><span>⏱️ <strong>${formatDuration(sessionTotalMs(s))}</strong> · ${s.sesiones.length} intento${s.sesiones.length===1?"":"s"} ${running?`· <span class="live-timer" data-live-timer="${id}">00:00:00</span>`:""}</span><button class="timer-btn ${running?"running":""}" data-timer-id="${id}">${running?"⏹️ Terminar":"▶️ Empezar"}</button></div>`;}
 function wireTimerButtons(container){container.querySelectorAll("[data-timer-id]").forEach(b=>b.onclick=e=>{e.stopPropagation();startTimer(b.dataset.timerId)});}
 function updateLiveTimers(){const c=activeCrono();document.querySelectorAll("[data-live-timer]").forEach(el=>{el.textContent=c&&c.id===el.dataset.liveTimer?formatHMS(Date.now()-new Date(c.inicio).getTime()):"00:00:00";});renderActiveStudyBar();updateModalTimerControl();}
@@ -1787,7 +1787,7 @@ setInterval(renderToday,30000);
 <script src="./supabase-config.js?v=stable-20260925-3"></script>
 <script src="./cloud-sync.js?v=stable-20260925-3"></script>
 <script src="./cloud-settings-ui.js?v=20260925-2"></script>
-<script src="./device-sync.js?v=20260925-1"></script>
+<script src="./device-sync.js?v=20261001-live3"></script>
 <script src="./supabase-media-bridge.js?v=stable-20260925-3"></script>
 
 <script>
