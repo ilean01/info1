@@ -1,0 +1,104 @@
+name: INFO1 install live cloud apply
+
+on:
+  push:
+    paths:
+      - '.github/workflows/install-live-cloud-apply.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch index and cloud sync
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          idx = Path('index.html')
+          html = idx.read_text(encoding='utf-8')
+          marker = 'INFO1_LIVE_REMOTE_APPLY_V1'
+          if marker not in html:
+              target = 'function save(){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(state));}catch(e){V15_LOCAL_WRITE_ERROR=true;}}'
+              if target not in html:
+                  raise SystemExit('save() target not found in index.html')
+              addition = r'''
+/* INFO1_LIVE_REMOTE_APPLY_V1: aplicar cambios de Supabase sin recargar/parpadear la página. */
+window.INFO1_APPLY_REMOTE_STATE=function(next,meta={}){
+  try{
+    if(!next||typeof next!=="object"||Array.isArray(next))return false;
+    const clone=JSON.parse(JSON.stringify(next));
+    for(const k of Object.keys(state))delete state[k];
+    Object.assign(state,clone);
+    try{localStorage.setItem(STORAGE_KEY,JSON.stringify(state));}catch(e){V15_LOCAL_WRITE_ERROR=true;}
+    if(typeof renderAll==="function")renderAll();
+    if(typeof updateLiveTimers==="function")updateLiveTimers();
+    if(typeof renderActiveStudyBar==="function")renderActiveStudyBar();
+    if(currentEdit&&typeof updateModalTimerControl==="function")updateModalTimerControl();
+    window.dispatchEvent(new CustomEvent("info1:remote-state-applied",{detail:meta||{}}));
+    return true;
+  }catch(e){console.warn("INFO1 live remote apply:",e);return false;}
+};
+'''
+              html = html.replace(target, target + addition, 1)
+
+          html = html.replace('./cloud-sync.js?v=stable-20260925-3', './cloud-sync.js?v=live-20260930-1')
+          html = html.replace('./cloud-sync.js?v=cloudfix-20260930-2', './cloud-sync.js?v=live-20260930-1')
+          html = html.replace('./device-sync.js?v=20260925-1', './device-sync.js?v=live-20260930-1')
+          html = html.replace('./device-sync.js?v=cloudfix-20260930-2', './device-sync.js?v=live-20260930-1')
+          idx.write_text(html, encoding='utf-8')
+
+          cloud = Path('cloud-sync.js')
+          s = cloud.read_text(encoding='utf-8')
+          old = '''      lastSeenRaw = nextRaw;
+      applyingRemote = false;
+
+      badge(
+        `☁️ Copia de Supabase guardada en este dispositivo · rev ${remoteRevision}. Actualizá la pantalla para mostrarla.`,
+        'ok',
+        '<button class="primary" id="info1ReloadCloud">Actualizar pantalla</button><button id="info1ImportBackup">Importar backup</button>'
+      );
+      bindStandardActions();
+'''
+          new = '''      lastSeenRaw = nextRaw;
+      let appliedLive = false;
+      try {
+        appliedLive = typeof window.INFO1_APPLY_REMOTE_STATE === 'function' &&
+          window.INFO1_APPLY_REMOTE_STATE(next, { source: 'supabase', revision: remoteRevision }) === true;
+      } catch (e) {
+        console.warn('INFO1 live apply:', e);
+      }
+      applyingRemote = false;
+
+      showSyncedBadge(appliedLive
+        ? `☁️ Sincronizado en vivo · rev ${remoteRevision}`
+        : `☁️ Copia de Supabase cargada · rev ${remoteRevision}`);
+'''
+          if old not in s:
+              raise SystemExit('loadCloudIntoLocal target not found in cloud-sync.js')
+          s = s.replace(old, new, 1)
+          cloud.write_text(s, encoding='utf-8')
+          PY
+      - name: Commit live apply
+        shell: bash
+        run: |
+          git config user.name 'INFO1 sync bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add index.html cloud-sync.js
+          if git diff --cached --quiet; then
+            echo 'No changes to commit'
+            exit 0
+          fi
+          git commit -m 'fix: apply cloud state live without page reload flicker'
+          for attempt in 1 2 3 4 5; do
+            git pull --rebase origin main || true
+            if git push; then exit 0; fi
+            sleep $((attempt * 2))
+          done
+          exit 1
