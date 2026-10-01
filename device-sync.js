@@ -9,11 +9,13 @@
 
   let dataBusy = false;
   let versionBusy = false;
-  let reloadQueued = false;
   let manualPullBusy = false;
   let userTouched = false;
+  let appUpdateAvailable = false;
+  let pendingRelease = '';
+
   let touchStartY = null;
-  let pullDistance = 0;
+  let touchPullDistance = 0;
   let desktopPullDistance = 0;
   let desktopPullTimer = null;
   let desktopPullCooldown = false;
@@ -27,7 +29,8 @@
   }
 
   function localState() {
-    return parse(localStorage.getItem(STATE_KEY), {}) || {};
+    const value = parse(localStorage.getItem(STATE_KEY), {});
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   }
 
   function hasActiveChrono() {
@@ -55,29 +58,31 @@
     };
   }
 
-  // Durante una recarga causada por aplicar la nube, el viejo pagehide del
-  // index no debe volver a guardar el estado anterior encima del recién bajado.
-  if (!window.__INFO1_STORAGE_GUARD_INSTALLED__) {
-    window.__INFO1_STORAGE_GUARD_INSTALLED__ = true;
-    const originalSetItem = Storage.prototype.setItem;
-    Storage.prototype.setItem = function(key, value) {
-      if (window.__INFO1_SUPPRESS_STATE_WRITES__ && this === localStorage && key === STATE_KEY) {
-        console.info('INFO1: escritura vieja ignorada durante recarga de nube');
-        return;
-      }
-      return originalSetItem.call(this, key, value);
-    };
+  function applyStateLive(next, meta = {}) {
+    if (!next || typeof next !== 'object' || Array.isArray(next)) return false;
+    try {
+      // `state` pertenece al script principal de INFO1. Los scripts clásicos
+      // comparten el entorno global léxico, por lo que podemos reemplazar su
+      // contenido sin recargar toda la página.
+      if (typeof state === 'undefined' || !state || typeof state !== 'object') return false;
+      const clone = JSON.parse(JSON.stringify(next));
+      for (const key of Object.keys(state)) delete state[key];
+      Object.assign(state, clone);
+
+      if (typeof renderAll === 'function') renderAll();
+      if (typeof updateLiveTimers === 'function') updateLiveTimers();
+      if (typeof renderActiveStudyBar === 'function') renderActiveStudyBar();
+      if (typeof updateModalTimerControl === 'function') updateModalTimerControl();
+
+      window.dispatchEvent(new CustomEvent('info1:remote-state-applied', { detail: meta }));
+      return true;
+    } catch (e) {
+      console.warn('INFO1 live apply:', e);
+      return false;
+    }
   }
 
-  function reloadFor(reason, preservePulledState = false) {
-    if (reloadQueued) return;
-    reloadQueued = true;
-    if (preservePulledState) window.__INFO1_SUPPRESS_STATE_WRITES__ = true;
-    const url = new URL(location.href);
-    url.searchParams.set('_info1sync', Date.now().toString());
-    console.info('INFO1 sync reload:', reason);
-    setTimeout(() => location.replace(url.toString()), 180);
-  }
+  window.INFO1_APPLY_REMOTE_STATE = applyStateLive;
 
   function setPullButtonBusy(busy) {
     const btn = document.getElementById('info1PullCloud');
@@ -116,48 +121,41 @@
     el.classList.toggle('ready', ready);
   }
 
-  function hideRefreshIndicator(delay = 500) {
+  function hideRefreshIndicator(delay = 450) {
     const el = document.getElementById('info1PullRefreshIndicator');
     if (!el) return;
-    setTimeout(() => {
-      el.classList.remove('show', 'ready');
-    }, delay);
+    setTimeout(() => el.classList.remove('show', 'ready'), delay);
   }
 
   async function pullLatest(reason = 'nube', force = false) {
-    if (manualPullBusy || reloadQueued) return false;
+    if (manualPullBusy) return false;
     const cloud = window.INFO1_CLOUD;
     if (!cloud?.pull || !cloud?.status?.connected) return false;
     if (!force && hasUnsyncedHumanChanges()) return false;
 
     manualPullBusy = true;
     setPullButtonBusy(true);
-
-    const targetRevision = Number(cloud.status?.revision || 0);
-    const beforeHydrated = cloudContext().hydratedRevision;
-    const falseStartupConflict = targetRevision > 0 && beforeHydrated === targetRevision && !userTouched && !hasPendingFlag();
-
-    if (falseStartupConflict) localStorage.removeItem(UNSYNCED_KEY);
-
     try {
       await cloud.pull();
-      await wait(140);
+      await wait(100);
+      if (window.INFO1_CLOUD?.status?.conflict) return false;
 
-      const status = window.INFO1_CLOUD?.status;
-      const afterHydrated = cloudContext().hydratedRevision;
-      if (status?.conflict) return false;
+      const next = localState();
+      const applied = applyStateLive(next, {
+        source: reason,
+        revision: Number(window.INFO1_CLOUD?.status?.revision || 0)
+      });
 
-      if (falseStartupConflict && afterHydrated === targetRevision) {
-        console.info('INFO1: conflicto de arranque resuelto sin recarga', targetRevision);
+      if (applied) {
+        userTouched = false;
+        console.info('INFO1: nube aplicada en vivo sin recargar');
         return true;
       }
 
-      if (afterHydrated > 0) {
-        // Necesitamos recrear el JS para que la variable interna state lea lo
-        // recién bajado. La protección de arriba evita que pagehide lo pise.
-        reloadFor(reason, true);
-        return true;
-      }
+      // Nunca recargamos automáticamente por datos. Si un navegador viejo no
+      // permite aplicar en vivo, el gesto manual de actualizar seguirá siendo
+      // la salida segura sin provocar un bucle de parpadeos.
+      console.warn('INFO1: la nube se guardó localmente pero no pudo aplicarse en vivo');
       return false;
     } catch (e) {
       console.warn('INFO1 pull latest:', e);
@@ -187,33 +185,18 @@
   }, true);
 
   async function syncLatestData() {
-    if (dataBusy || document.hidden || reloadQueued) return false;
+    if (dataBusy || document.hidden) return false;
 
     const cloud = window.INFO1_CLOUD;
     const sb = window.INFO1_SUPABASE_CLIENT;
     const ctx = cloudContext();
     if (!ctx.connected || !ctx.workspaceId || !sb || !cloud?.pull) return false;
-
-    const remoteKnown = Number(cloud.status?.revision || 0);
-    const hydrated = Number(ctx.hydratedRevision || 0);
-
-    // El cronómetro activo YA NO bloquea la sincronización. Si ese cronómetro
-    // está sincronizado y otro dispositivo lo detiene, esta copia debe aceptar
-    // inmediatamente el nuevo estado de la nube.
-    if (cloud.status?.conflict && remoteKnown > 0 && remoteKnown === hydrated && !userTouched && !hasPendingFlag()) {
-      localStorage.removeItem(UNSYNCED_KEY);
-      await pullLatest('resolver normalización de arranque', true);
-      return true;
-    }
-
-    if (cloud.status?.conflict && !hasUnsyncedHumanChanges()) {
-      await pullLatest('cambio recibido desde otro dispositivo', true);
-      return true;
-    }
-
-    // Sólo frenamos la descarga si realmente hay una edición humana pendiente
-    // de subir. Un cronómetro activo pero ya guardado en nube no cuenta.
     if (hasUnsyncedHumanChanges()) return false;
+
+    // Realtime ya sabe que otro dispositivo avanzó. Se aplica sin reload.
+    if (cloud.status?.conflict) {
+      return await pullLatest('cambio de otro dispositivo', true);
+    }
 
     dataBusy = true;
     try {
@@ -227,8 +210,7 @@
       const remoteRev = Number(result.data.revision || 0);
       const localRev = Number(cloudContext().hydratedRevision || 0);
       if (remoteRev > localRev && !hasUnsyncedHumanChanges()) {
-        await pullLatest(`datos rev ${remoteRev}`, true);
-        return true;
+        return await pullLatest(`datos rev ${remoteRev}`, true);
       }
       return false;
     } catch (e) {
@@ -240,9 +222,7 @@
   }
 
   async function checkLatestApp() {
-    // Para actualizar el código sí esperamos a que termine el cronómetro: una
-    // recarga de versión no debe cortar una sesión de estudio en curso.
-    if (versionBusy || document.hidden || hasUnsyncedHumanChanges() || hasActiveChrono() || reloadQueued) return false;
+    if (versionBusy || document.hidden) return false;
     versionBusy = true;
     try {
       const r = await fetch(`${RELEASE_URL}?t=${Date.now()}`, { cache: 'no-store' });
@@ -258,12 +238,8 @@
       }
 
       if (seen !== release) {
-        localStorage.setItem(RELEASE_KEY, release);
-        try {
-          const reg = await navigator.serviceWorker?.getRegistration?.();
-          await reg?.update?.();
-        } catch {}
-        reloadFor(`app ${release}`, false);
+        appUpdateAvailable = true;
+        pendingRelease = release;
         return true;
       }
       return false;
@@ -275,11 +251,18 @@
     }
   }
 
+  function reloadForNewAppVersion() {
+    if (!appUpdateAvailable || hasUnsyncedHumanChanges() || hasActiveChrono()) return false;
+    if (pendingRelease) localStorage.setItem(RELEASE_KEY, pendingRelease);
+    const url = new URL(location.href);
+    url.searchParams.set('_info1version', Date.now().toString());
+    location.replace(url.toString());
+    return true;
+  }
+
   async function refreshNow() {
     showRefreshIndicator('↻ Actualizando…', true);
 
-    // Damos un momento al autoguardado para terminar antes de buscar una copia
-    // remota nueva. Nunca forzamos una descarga encima de una edición pendiente.
     const deadline = Date.now() + 4500;
     while (hasUnsyncedHumanChanges() && Date.now() < deadline) await wait(250);
 
@@ -290,10 +273,15 @@
     }
 
     const changed = await syncLatestData();
-    if (reloadQueued) return true;
+    await checkLatestApp();
 
-    const appChanged = await checkLatestApp();
-    if (reloadQueued || appChanged) return true;
+    // La versión de código sólo se recarga cuando VOS pedís actualizar; nunca
+    // automáticamente cada pocos segundos. Así no vuelve a parpadear la app.
+    if (appUpdateAvailable && !hasActiveChrono()) {
+      showRefreshIndicator('✓ Nueva versión · actualizando…', true);
+      setTimeout(reloadForNewAppVersion, 180);
+      return true;
+    }
 
     showRefreshIndicator(changed ? '✓ Datos actualizados' : '✓ Ya está actualizado', true);
     hideRefreshIndicator(700);
@@ -303,36 +291,30 @@
   function installPullToRefresh() {
     ensureRefreshIndicator();
 
-    // Celular/tablet: arrastrar físicamente hacia abajo estando arriba del todo.
     document.addEventListener('touchstart', e => {
-      if (e.touches?.length !== 1) return;
-      if (window.scrollY > 2) return;
+      if (e.touches?.length !== 1 || window.scrollY > 2) return;
       touchStartY = e.touches[0].clientY;
-      pullDistance = 0;
+      touchPullDistance = 0;
     }, { passive: true });
 
     document.addEventListener('touchmove', e => {
       if (touchStartY == null || e.touches?.length !== 1 || window.scrollY > 2) return;
-      pullDistance = Math.max(0, e.touches[0].clientY - touchStartY);
-      if (pullDistance < 18) return;
-      if (pullDistance >= 72) showRefreshIndicator('↻ Soltá para actualizar', true);
+      touchPullDistance = Math.max(0, e.touches[0].clientY - touchStartY);
+      if (touchPullDistance < 18) return;
+      if (touchPullDistance >= 72) showRefreshIndicator('↻ Soltá para actualizar', true);
       else showRefreshIndicator('↓ Bajá para actualizar', false);
     }, { passive: true });
 
     document.addEventListener('touchend', () => {
-      const shouldRefresh = touchStartY != null && pullDistance >= 72;
+      const shouldRefresh = touchStartY != null && touchPullDistance >= 72;
       touchStartY = null;
-      pullDistance = 0;
+      touchPullDistance = 0;
       if (shouldRefresh) refreshNow();
       else hideRefreshIndicator(120);
     }, { passive: true });
 
-    // Notebook/trackpad: estando arriba del todo, seguir deslizando hacia abajo
-    // (el gesto genera wheel negativo). Al soltar el trackpad se actualiza igual
-    // que en el celular; no hace falta Command+R.
     window.addEventListener('wheel', e => {
       if (e.ctrlKey || desktopPullCooldown) return;
-
       if (window.scrollY > 2 || e.deltaY >= 0) {
         desktopPullDistance = 0;
         clearTimeout(desktopPullTimer);
@@ -352,29 +334,27 @@
           hideRefreshIndicator(120);
           return;
         }
-
         desktopPullCooldown = true;
-        refreshNow().finally(() => {
-          setTimeout(() => { desktopPullCooldown = false; }, 1000);
-        });
-      }, 150);
+        refreshNow().finally(() => setTimeout(() => { desktopPullCooldown = false; }, 900));
+      }, 160);
     }, { passive: true });
   }
 
   async function syncEverything() {
     await syncLatestData();
-    if (!reloadQueued) await checkLatestApp();
+    await checkLatestApp();
   }
 
   window.INFO1_DEVICE_SYNC = {
     refreshNow,
     syncLatestData,
+    applyStateLive,
     get status() {
       return {
         activeChrono: hasActiveChrono(),
         pending: hasPendingFlag(),
         unsyncedHumanChanges: hasUnsyncedHumanChanges(),
-        reloadQueued
+        appUpdateAvailable
       };
     }
   };
@@ -385,13 +365,12 @@
     if (!document.hidden) setTimeout(syncEverything, 250);
   });
 
-  // Realtime pone cloud.status.conflict casi enseguida. Este watcher local no
-  // hace consultas de red: sólo reacciona a esa señal y trae la nueva rev.
+  // Realtime: respuesta rápida sin recargar la página.
   setInterval(() => {
     if (window.INFO1_CLOUD?.status?.conflict && !hasUnsyncedHumanChanges()) syncLatestData();
   }, 900);
 
-  // Respaldo por polling por si Realtime se corta.
+  // Respaldo si Realtime se interrumpe.
   setInterval(syncLatestData, 8000);
   setInterval(checkLatestApp, 45000);
 
