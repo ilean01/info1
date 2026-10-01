@@ -24,10 +24,12 @@
   let timerChannel = null;
   let timerWorkspaceId = null;
   let timerLastVersion = 0;
-  let timerLastSnapshot = null;
+  let timerCanonicalRow = null;
+  let timerObservedSnapshot = null;
   let timerApplyingRemote = false;
   let timerPublishBusy = false;
   let timerPublishQueued = false;
+  let timerPendingPublish = false;
 
   function parse(raw, fallback = null) {
     try { return raw ? JSON.parse(raw) : fallback; } catch { return fallback; }
@@ -83,10 +85,19 @@
   function deviceId() {
     let id = localStorage.getItem(DEVICE_ID_KEY);
     if (!id) {
-      id = (crypto?.randomUUID?.() || `dev-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      id = crypto?.randomUUID?.() || `dev-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       localStorage.setItem(DEVICE_ID_KEY, id);
     }
     return id;
+  }
+
+  function persistAppStateDirectly() {
+    try {
+      const s = appState();
+      if (s && typeof s === 'object') localStorage.setItem(STATE_KEY, JSON.stringify(s));
+    } catch (e) {
+      console.warn('INFO1 persist shared timer:', e);
+    }
   }
 
   function setPullButtonBusy(busy) {
@@ -139,6 +150,27 @@
     try { if (typeof renderAll === 'function') renderAll(); } catch {}
   }
 
+  function timerSnapshot(c) {
+    return c?.id && c?.inicio ? `${c.id}|${c.inicio}` : 'STOPPED';
+  }
+
+  function canonicalizeTimerAfterFullState() {
+    if (!timerCanonicalRow) return;
+    try {
+      if (typeof state === 'undefined' || !state || typeof state !== 'object') return;
+      if (timerCanonicalRow.active && timerCanonicalRow.topic_id && timerCanonicalRow.started_at) {
+        state.__crono = {
+          id: timerCanonicalRow.topic_id,
+          inicio: timerCanonicalRow.started_at,
+          source: 'shared-live'
+        };
+      } else {
+        delete state.__crono;
+      }
+      timerObservedSnapshot = timerSnapshot(state.__crono || null);
+    } catch {}
+  }
+
   function applyStateLive(next, meta = {}) {
     if (!next || typeof next !== 'object' || Array.isArray(next)) return false;
     try {
@@ -146,6 +178,7 @@
       const clone = JSON.parse(JSON.stringify(next));
       for (const key of Object.keys(state)) delete state[key];
       Object.assign(state, clone);
+      canonicalizeTimerAfterFullState();
 
       if (state.__settings && typeof activeP2Profile !== 'undefined') {
         activeP2Profile = state.__settings.p2Profile === 'elias' ? 'elias' : 'ile';
@@ -157,7 +190,6 @@
       if (typeof updateModalTimerControl === 'function') updateModalTimerControl();
       if (typeof renderPersistStatus === 'function') renderPersistStatus();
 
-      timerLastSnapshot = timerSnapshot(currentCrono());
       window.dispatchEvent(new CustomEvent('info1:remote-state-applied', { detail: meta }));
       return true;
     } catch (e) {
@@ -180,7 +212,6 @@
       await cloud.pull();
       await wait(80);
       if (window.INFO1_CLOUD?.status?.conflict) return false;
-
       const applied = applyStateLive(localState(), {
         source: reason,
         revision: Number(window.INFO1_CLOUD?.status?.revision || 0)
@@ -228,21 +259,21 @@
     }
   }
 
-  /* ===== CRONÓMETRO COMPARTIDO EN TIEMPO REAL ===== */
+  /* ===== CRONÓMETRO COMPARTIDO REAL ===== */
 
-  function timerSnapshot(c) {
-    return c?.id && c?.inicio ? `${c.id}|${c.inicio}` : 'STOPPED';
-  }
-
-  function timerRowVersion() {
-    return Date.now() * 1000 + Math.floor(Math.random() * 1000);
-  }
-
-  function applySharedTimerRow(row) {
+  function applySharedTimerRow(row, force = false) {
     if (!row) return false;
     const incomingVersion = Number(row.version || 0);
-    if (incomingVersion && incomingVersion < timerLastVersion) return false;
+    if (!force && incomingVersion && incomingVersion <= timerLastVersion) return false;
+
     timerLastVersion = Math.max(timerLastVersion, incomingVersion);
+    timerCanonicalRow = {
+      active: !!row.active,
+      topic_id: row.topic_id || null,
+      started_at: row.started_at || null,
+      version: incomingVersion,
+      source_id: row.source_id || null
+    };
 
     try {
       if (typeof state === 'undefined' || !state || typeof state !== 'object') return false;
@@ -258,8 +289,11 @@
         delete state.__crono;
       }
 
-      timerLastSnapshot = timerSnapshot(state.__crono || null);
+      timerObservedSnapshot = timerSnapshot(state.__crono || null);
+      timerPendingPublish = false;
+      persistAppStateDirectly();
       refreshTimerUi();
+
       window.dispatchEvent(new CustomEvent('info1:shared-timer', {
         detail: {
           active: !!row.active,
@@ -280,36 +314,46 @@
   async function publishSharedTimer() {
     if (timerPublishBusy) {
       timerPublishQueued = true;
-      return;
+      return false;
     }
 
     const sb = window.INFO1_SUPABASE_CLIENT;
     const ctx = cloudContext();
-    if (!sb || !ctx.connected || !ctx.workspaceId) return;
+    if (!sb || !ctx.connected || !ctx.workspaceId) {
+      timerPendingPublish = true;
+      return false;
+    }
 
     timerPublishBusy = true;
     try {
       const c = currentCrono();
-      const version = timerRowVersion();
       const payload = {
         workspace_id: ctx.workspaceId,
         active: !!(c?.id && c?.inicio),
         topic_id: c?.id || null,
         started_at: c?.inicio || null,
-        version,
-        updated_at: new Date().toISOString(),
         updated_by: ctx.userId || null,
         source_id: deviceId()
       };
 
       const result = await sb
         .from('info1_live_timer')
-        .upsert(payload, { onConflict: 'workspace_id' });
+        .upsert(payload, { onConflict: 'workspace_id' })
+        .select('active,topic_id,started_at,version,updated_at,source_id')
+        .single();
+
       if (result.error) throw result.error;
-      timerLastVersion = version;
-      timerLastSnapshot = timerSnapshot(c);
+      timerPendingPublish = false;
+      if (result.data) {
+        timerLastVersion = Number(result.data.version || timerLastVersion);
+        timerCanonicalRow = result.data;
+      }
+      timerObservedSnapshot = timerSnapshot(c);
+      return true;
     } catch (e) {
+      timerPendingPublish = true;
       console.warn('INFO1 shared timer publish:', e);
+      return false;
     } finally {
       timerPublishBusy = false;
       if (timerPublishQueued) {
@@ -319,22 +363,39 @@
     }
   }
 
+  // Safari/PWA puede ejecutar rutas donde reemplazar `save()` no alcanza.
+  // Este observador mira directamente el cronómetro real y publica cualquier
+  // cambio local (empezar, parar o cambiar de tema), sin depender del botón.
+  function observeLocalTimer() {
+    if (timerApplyingRemote) return;
+    const snap = timerSnapshot(currentCrono());
+    if (timerObservedSnapshot === null) {
+      timerObservedSnapshot = snap;
+      return;
+    }
+    if (snap !== timerObservedSnapshot) {
+      timerObservedSnapshot = snap;
+      timerPendingPublish = true;
+      publishSharedTimer();
+      return;
+    }
+    if (timerPendingPublish && !timerPublishBusy) publishSharedTimer();
+  }
+
   function patchSaveForSharedTimer() {
     if (window.__INFO1_SHARED_TIMER_SAVE_PATCHED__) return;
     try {
       if (typeof save !== 'function') return;
       window.__INFO1_SHARED_TIMER_SAVE_PATCHED__ = true;
       const originalSave = save;
-      timerLastSnapshot = timerSnapshot(currentCrono());
-
       save = function(...args) {
+        const before = timerSnapshot(currentCrono());
         const result = originalSave.apply(this, args);
-        if (!timerApplyingRemote) {
-          const snap = timerSnapshot(currentCrono());
-          if (snap !== timerLastSnapshot) {
-            timerLastSnapshot = snap;
-            setTimeout(publishSharedTimer, 0);
-          }
+        const after = timerSnapshot(currentCrono());
+        if (!timerApplyingRemote && after !== before) {
+          timerObservedSnapshot = after;
+          timerPendingPublish = true;
+          setTimeout(publishSharedTimer, 0);
         }
         return result;
       };
@@ -349,7 +410,6 @@
     if (!sb || !ctx.connected || !ctx.workspaceId) return false;
 
     patchSaveForSharedTimer();
-
     if (timerWorkspaceId === ctx.workspaceId && timerChannel) return true;
 
     if (timerChannel) {
@@ -367,10 +427,10 @@
       if (current.error) throw current.error;
 
       if (current.data) {
-        applySharedTimerRow(current.data);
+        applySharedTimerRow(current.data, true);
       } else {
-        // Primera vez: sembramos la tabla con el cronómetro que ya está en el
-        // estado principal para no perder una sesión que esté corriendo.
+        timerObservedSnapshot = timerSnapshot(currentCrono());
+        timerPendingPublish = true;
         await publishSharedTimer();
       }
 
@@ -413,10 +473,12 @@
       if (!result.error && result.data && Number(result.data.version || 0) > timerLastVersion) {
         applySharedTimerRow(result.data);
       }
-    } catch {}
+    } catch (e) {
+      console.warn('INFO1 shared timer poll:', e);
+    }
   }
 
-  /* ===== ACTUALIZACIÓN DE LA APP ===== */
+  /* ===== ACTUALIZACIÓN DE APP ===== */
 
   async function checkLatestApp() {
     if (versionBusy || document.hidden) return false;
@@ -515,7 +577,6 @@
         hideRefreshIndicator(100);
         return;
       }
-
       desktopPullDistance = Math.min(220, desktopPullDistance + Math.abs(e.deltaY));
       if (desktopPullDistance >= 120) showRefreshIndicator('↻ Soltá para actualizar', true);
       else if (desktopPullDistance >= 18) showRefreshIndicator('↓ Deslizá para actualizar', false);
@@ -564,6 +625,7 @@
     applyStateLive,
     setupSharedTimer,
     pollSharedTimer,
+    publishSharedTimer,
     get status() {
       return {
         activeChrono: hasActiveChrono(),
@@ -571,33 +633,34 @@
         unsyncedHumanChanges: hasUnsyncedHumanChanges(),
         appUpdateAvailable,
         sharedTimerReady: !!timerChannel,
-        sharedTimerVersion: timerLastVersion
+        sharedTimerVersion: timerLastVersion,
+        sharedTimerPending: timerPendingPublish,
+        localTimer: timerSnapshot(currentCrono())
       };
     }
   };
 
-  window.addEventListener('online', () => setTimeout(syncEverything, 250));
-  window.addEventListener('focus', () => setTimeout(syncEverything, 120));
+  window.addEventListener('online', () => setTimeout(syncEverything, 200));
+  window.addEventListener('focus', () => setTimeout(syncEverything, 100));
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) setTimeout(syncEverything, 120);
+    if (!document.hidden) setTimeout(syncEverything, 100);
   });
 
-  // Full-state sync: sólo cuando hace falta. El cronómetro ya usa su propio
-  // canal realtime y no depende de estas recargas/revisiones.
+  setInterval(observeLocalTimer, 180);
+
   setInterval(() => {
     if (window.INFO1_CLOUD?.status?.conflict && !hasUnsyncedHumanChanges()) syncLatestData();
   }, 900);
   setInterval(syncLatestData, 8000);
 
-  // Respaldo del cronómetro en caso de que Realtime tenga una interrupción.
   setInterval(() => {
     setupSharedTimer();
     pollSharedTimer();
-  }, 3000);
+  }, 1500);
 
   setInterval(checkLatestApp, 45000);
 
   installPullToRefresh();
   patchSaveForSharedTimer();
-  setTimeout(syncEverything, 600);
+  setTimeout(syncEverything, 400);
 })();
