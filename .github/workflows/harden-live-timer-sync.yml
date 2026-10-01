@@ -1,0 +1,72 @@
+name: INFO1 harden live timer sync
+
+on:
+  push:
+    paths:
+      - '.github/workflows/harden-live-timer-sync.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch timer hooks and cache bust
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('index.html')
+          s = p.read_text(encoding='utf-8')
+
+          # Force every phone/notebook to fetch the current timer sync client.
+          import re
+          s = re.sub(r'(<script src="\./device-sync\.js\?v=)[^"]+("[^>]*></script>)',
+                     r'\g<1>20261001-live3\g<2>', s, count=1)
+
+          old = 'function finishActiveCrono(){const c=activeCrono();if(!c)return false;const elapsed=Math.max(0,Date.now()-new Date(c.inicio).getTime());appendSession(c.id,c.inicio,elapsed);delete state.__crono;save();return true;}'
+          new = 'function finishActiveCrono(){const c=activeCrono();if(!c)return false;const elapsed=Math.max(0,Date.now()-new Date(c.inicio).getTime());appendSession(c.id,c.inicio,elapsed);delete state.__crono;save();window.INFO1_DEVICE_SYNC?.publishSharedTimer?.();return true;}'
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif new not in s:
+              raise SystemExit('finishActiveCrono target not found')
+
+          old = 'state.__crono={id,inicio:new Date().toISOString(),source:"ficha-auto"};\n  save();ensureCronoTicker();return true;'
+          new = 'state.__crono={id,inicio:new Date().toISOString(),source:"ficha-auto"};\n  save();window.INFO1_DEVICE_SYNC?.publishSharedTimer?.();ensureCronoTicker();return true;'
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif new not in s:
+              raise SystemExit('beginFichaTimer target not found')
+
+          old = 'state.__crono={id,inicio:new Date().toISOString()};save();ensureCronoTicker();renderAll();}'
+          new = 'state.__crono={id,inicio:new Date().toISOString()};save();window.INFO1_DEVICE_SYNC?.publishSharedTimer?.();ensureCronoTicker();renderAll();}'
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif new not in s:
+              raise SystemExit('startTimer target not found')
+
+          p.write_text(s, encoding='utf-8')
+          PY
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name 'INFO1 sync bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add index.html
+          if git diff --cached --quiet; then
+            echo 'No changes'
+            exit 0
+          fi
+          git commit -m 'fix: publish timer start stop directly and bust mobile cache'
+          for attempt in 1 2 3 4 5; do
+            git pull --rebase origin main && git push && exit 0
+            sleep $((attempt * 2))
+          done
+          exit 1
