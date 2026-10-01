@@ -14,6 +14,9 @@
   let userTouched = false;
   let touchStartY = null;
   let pullDistance = 0;
+  let desktopPullDistance = 0;
+  let desktopPullTimer = null;
+  let desktopPullCooldown = false;
 
   function parse(raw, fallback = null) {
     try { return raw ? JSON.parse(raw) : fallback; } catch { return fallback; }
@@ -300,6 +303,7 @@
   function installPullToRefresh() {
     ensureRefreshIndicator();
 
+    // Celular/tablet: arrastrar físicamente hacia abajo estando arriba del todo.
     document.addEventListener('touchstart', e => {
       if (e.touches?.length !== 1) return;
       if (window.scrollY > 2) return;
@@ -321,6 +325,39 @@
       pullDistance = 0;
       if (shouldRefresh) refreshNow();
       else hideRefreshIndicator(120);
+    }, { passive: true });
+
+    // Notebook/trackpad: estando arriba del todo, seguir deslizando hacia abajo
+    // (el gesto genera wheel negativo). Al soltar el trackpad se actualiza igual
+    // que en el celular; no hace falta Command+R.
+    window.addEventListener('wheel', e => {
+      if (e.ctrlKey || desktopPullCooldown) return;
+
+      if (window.scrollY > 2 || e.deltaY >= 0) {
+        desktopPullDistance = 0;
+        clearTimeout(desktopPullTimer);
+        hideRefreshIndicator(100);
+        return;
+      }
+
+      desktopPullDistance = Math.min(220, desktopPullDistance + Math.abs(e.deltaY));
+      if (desktopPullDistance >= 120) showRefreshIndicator('↻ Soltá para actualizar', true);
+      else if (desktopPullDistance >= 18) showRefreshIndicator('↓ Deslizá para actualizar', false);
+
+      clearTimeout(desktopPullTimer);
+      desktopPullTimer = setTimeout(() => {
+        const shouldRefresh = desktopPullDistance >= 120;
+        desktopPullDistance = 0;
+        if (!shouldRefresh) {
+          hideRefreshIndicator(120);
+          return;
+        }
+
+        desktopPullCooldown = true;
+        refreshNow().finally(() => {
+          setTimeout(() => { desktopPullCooldown = false; }, 1000);
+        });
+      }, 150);
     }, { passive: true });
   }
 
