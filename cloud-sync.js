@@ -40,6 +40,12 @@
   let channel = null;
   let booting = false;
 
+  // Un cambio del cronómetro recibido desde otro dispositivo ya viene de la nube.
+  // Lo marcamos como visto para que no se vuelva a subir como si fuera una edición local.
+  window.addEventListener('info1:shared-timer', () => {
+    try { lastSeenRaw = localRaw(); } catch {}
+  });
+
   function parse(raw, fallback = {}) {
     try { return raw ? JSON.parse(raw) : fallback; }
     catch { return fallback; }
@@ -405,7 +411,7 @@
   async function loadCloudIntoLocal(userInitiated = false) {
     if (!session || !workspace) return;
     try {
-      badge('☁️ Leyendo la copia de Supabase…', 'warn');
+      if (userInitiated) badge('☁️ Leyendo la copia de Supabase…', 'warn');
       const remote = await readRemote();
       if (!remote) throw new Error('Todavía no hay una copia en Supabase.');
 
@@ -424,16 +430,41 @@
       lastSeenRaw = nextRaw;
       applyingRemote = false;
 
+      // Aplicar en memoria y redibujar sin recargar la página. Así cambios de
+      // Sé / Más o menos / No sé aparecen en el otro dispositivo en vivo.
+      let appliedLive = false;
+      try {
+        if (typeof window.INFO1_APPLY_REMOTE_STATE === 'function') {
+          appliedLive = !!window.INFO1_APPLY_REMOTE_STATE(next, {
+            source: userInitiated ? 'manual-cloud-pull' : 'cloud-realtime',
+            revision: remoteRevision
+          });
+        }
+      } catch (e) {
+        console.warn('INFO1 live state apply:', e);
+      }
+
+      if (!userInitiated) {
+        showSyncedBadge(`☁️ Actualizado automáticamente · rev ${remoteRevision}`);
+        return appliedLive;
+      }
+
       badge(
-        `☁️ Copia de Supabase guardada en este dispositivo · rev ${remoteRevision}. Actualizá la pantalla para mostrarla.`,
+        `☁️ Copia de Supabase aplicada · rev ${remoteRevision}.`,
         'ok',
-        '<button class="primary" id="info1ReloadCloud">Actualizar pantalla</button><button id="info1ImportBackup">Importar backup</button>'
+        '<button id="info1ImportBackup">Importar backup</button>'
       );
       bindStandardActions();
+      return true;
     } catch (e) {
       applyingRemote = false;
+      if (!userInitiated) {
+        console.warn('INFO1 auto cloud pull:', e);
+        return false;
+      }
       badge(`☁️ No pude cargar la nube: ${e?.message || 'error desconocido'}`, 'bad', '<button id="info1PullCloud">Reintentar</button>');
       bindStandardActions();
+      return false;
     }
   }
 
@@ -589,8 +620,10 @@
 
       if (conflict) return;
       clearTimeout(pushTimer);
-      pushTimer = setTimeout(pushLocal, 2500);
-    }, 1000);
+      // Estado y habilidades deben viajar casi en tiempo real entre dispositivos.
+      // El debounce sigue protegiendo notas/escritura continua de demasiados POST.
+      pushTimer = setTimeout(pushLocal, 350);
+    }, 200);
 
     if (channel) {
       try { sb.removeChannel(channel); } catch {}
@@ -606,9 +639,25 @@
       }, payload => {
         const rev = Number(payload.new?.revision || 0);
         if (!rev || rev <= remoteRevision || busy) return;
-        conflict = true;
+
+        // Comprobamos también el localStorage directamente: puede haber una
+        // edición recién hecha que todavía no alcanzó a detectar el monitor.
+        const changedHere = localRaw() !== lastSeenRaw;
+        if (dirty || changedHere) {
+          if (changedHere) {
+            dirty = true;
+            localStorage.setItem(UNSYNCED_KEY, '1');
+          }
+          conflict = true;
+          clearTimeout(pushTimer);
+          showConflictBadge(`☁️ Otro dispositivo guardó cambios (rev ${rev}) mientras este también tenía cambios locales. Elegí qué copia usar.`);
+          return;
+        }
+
+        // Si este dispositivo está limpio, el cambio remoto se aplica solo.
+        // No se recarga la página y el cronómetro compartido sigue siendo canónico.
         clearTimeout(pushTimer);
-        showConflictBadge(`☁️ Otro dispositivo guardó cambios (rev ${rev}). Elegí qué copia usar; no se aplicó nada automáticamente.`);
+        loadCloudIntoLocal(false);
       })
       .subscribe(status => {
         if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
