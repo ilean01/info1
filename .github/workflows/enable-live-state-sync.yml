@@ -1,0 +1,82 @@
+name: INFO1 install live state sync
+
+on:
+  push:
+    paths:
+      - '.github/workflows/enable-live-state-sync.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch cloud sync for automatic cross-device state updates
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          from datetime import datetime, timezone
+
+          p = Path('cloud-sync.js')
+          s = p.read_text()
+
+          old = """  let channel = null;\n  let booting = false;\n"""
+          new = """  let channel = null;\n  let booting = false;\n\n  // Un cambio del cronómetro recibido desde otro dispositivo ya viene de la nube.\n  // Lo marcamos como visto para que no se vuelva a subir como si fuera una edición local.\n  window.addEventListener('info1:shared-timer', () => {\n    try { lastSeenRaw = localRaw(); } catch {}\n  });\n"""
+          assert old in s, 'variables anchor not found'
+          s = s.replace(old, new, 1)
+
+          old = """  async function loadCloudIntoLocal(userInitiated = false) {\n    if (!session || !workspace) return;\n    try {\n      badge('☁️ Leyendo la copia de Supabase…', 'warn');\n      const remote = await readRemote();\n"""
+          new = """  async function loadCloudIntoLocal(userInitiated = false) {\n    if (!session || !workspace) return;\n    try {\n      if (userInitiated) badge('☁️ Leyendo la copia de Supabase…', 'warn');\n      const remote = await readRemote();\n"""
+          assert old in s, 'load start anchor not found'
+          s = s.replace(old, new, 1)
+
+          old = """      lastSeenRaw = nextRaw;\n      applyingRemote = false;\n\n      badge(\n        `☁️ Copia de Supabase guardada en este dispositivo · rev ${remoteRevision}. Actualizá la pantalla para mostrarla.`,\n        'ok',\n        '<button class=\"primary\" id=\"info1ReloadCloud\">Actualizar pantalla</button><button id=\"info1ImportBackup\">Importar backup</button>'\n      );\n      bindStandardActions();\n"""
+          new = """      lastSeenRaw = nextRaw;\n      applyingRemote = false;\n\n      // Aplicar en memoria y redibujar sin recargar la página. Así cambios de\n      // Sé / Más o menos / No sé aparecen en el otro dispositivo en vivo.\n      let appliedLive = false;\n      try {\n        if (typeof window.INFO1_APPLY_REMOTE_STATE === 'function') {\n          appliedLive = !!window.INFO1_APPLY_REMOTE_STATE(next, {\n            source: userInitiated ? 'manual-cloud-pull' : 'cloud-realtime',\n            revision: remoteRevision\n          });\n        }\n      } catch (e) {\n        console.warn('INFO1 live state apply:', e);\n      }\n\n      if (!userInitiated) {\n        showSyncedBadge(`☁️ Actualizado automáticamente · rev ${remoteRevision}`);\n        return appliedLive;\n      }\n\n      badge(\n        `☁️ Copia de Supabase aplicada · rev ${remoteRevision}.`,\n        'ok',\n        '<button id=\"info1ImportBackup\">Importar backup</button>'\n      );\n      bindStandardActions();\n      return true;\n"""
+          assert old in s, 'load apply anchor not found'
+          s = s.replace(old, new, 1)
+
+          old = """    } catch (e) {\n      applyingRemote = false;\n      badge(`☁️ No pude cargar la nube: ${e?.message || 'error desconocido'}`, 'bad', '<button id=\"info1PullCloud\">Reintentar</button>');\n      bindStandardActions();\n    }\n  }\n"""
+          new = """    } catch (e) {\n      applyingRemote = false;\n      if (!userInitiated) {\n        console.warn('INFO1 auto cloud pull:', e);\n        return false;\n      }\n      badge(`☁️ No pude cargar la nube: ${e?.message || 'error desconocido'}`, 'bad', '<button id=\"info1PullCloud\">Reintentar</button>');\n      bindStandardActions();\n      return false;\n    }\n  }\n"""
+          assert old in s, 'load catch anchor not found'
+          s = s.replace(old, new, 1)
+
+          old = """      if (conflict) return;\n      clearTimeout(pushTimer);\n      pushTimer = setTimeout(pushLocal, 2500);\n    }, 1000);\n"""
+          new = """      if (conflict) return;\n      clearTimeout(pushTimer);\n      // Estado y habilidades deben viajar casi en tiempo real entre dispositivos.\n      // El debounce sigue protegiendo notas/escritura continua de demasiados POST.\n      pushTimer = setTimeout(pushLocal, 350);\n    }, 200);\n"""
+          assert old in s, 'monitor timing anchor not found'
+          s = s.replace(old, new, 1)
+
+          old = """      }, payload => {\n        const rev = Number(payload.new?.revision || 0);\n        if (!rev || rev <= remoteRevision || busy) return;\n        conflict = true;\n        clearTimeout(pushTimer);\n        showConflictBadge(`☁️ Otro dispositivo guardó cambios (rev ${rev}). Elegí qué copia usar; no se aplicó nada automáticamente.`);\n      })\n"""
+          new = """      }, payload => {\n        const rev = Number(payload.new?.revision || 0);\n        if (!rev || rev <= remoteRevision || busy) return;\n\n        // Comprobamos también el localStorage directamente: puede haber una\n        // edición recién hecha que todavía no alcanzó a detectar el monitor.\n        const changedHere = localRaw() !== lastSeenRaw;\n        if (dirty || changedHere) {\n          if (changedHere) {\n            dirty = true;\n            localStorage.setItem(UNSYNCED_KEY, '1');\n          }\n          conflict = true;\n          clearTimeout(pushTimer);\n          showConflictBadge(`☁️ Otro dispositivo guardó cambios (rev ${rev}) mientras este también tenía cambios locales. Elegí qué copia usar.`);\n          return;\n        }\n\n        // Si este dispositivo está limpio, el cambio remoto se aplica solo.\n        // No se recarga la página y el cronómetro compartido sigue siendo canónico.\n        clearTimeout(pushTimer);\n        loadCloudIntoLocal(false);\n      })\n"""
+          assert old in s, 'realtime callback anchor not found'
+          s = s.replace(old, new, 1)
+
+          p.write_text(s)
+
+          idx = Path('index.html')
+          html = idx.read_text()
+          oldv = './cloud-sync.js?v=stable-20260925-3'
+          newv = './cloud-sync.js?v=live-state-20261001-1'
+          assert oldv in html, 'cloud-sync cache bust anchor not found'
+          html = html.replace(oldv, newv, 1)
+          idx.write_text(html)
+
+          release = {
+            'release': 'live-state-sync-20261001-1',
+            'published_at': datetime.now(timezone.utc).isoformat()
+          }
+          Path('release.json').write_text(json.dumps(release, separators=(',', ':')) + '\n')
+          PY
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name "INFO1 live sync bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add cloud-sync.js index.html release.json
+          git commit -m "feat: sync study states live across devices"
+          git push
