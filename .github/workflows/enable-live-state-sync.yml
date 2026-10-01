@@ -20,8 +20,6 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import json
-          from datetime import datetime, timezone
 
           p = Path('cloud-sync.js')
           s = p.read_text()
@@ -65,18 +63,14 @@ jobs:
           assert oldv in html, 'cloud-sync cache bust anchor not found'
           html = html.replace(oldv, newv, 1)
           idx.write_text(html)
-
-          release = {
-            'release': 'live-state-sync-20261001-1',
-            'published_at': datetime.now(timezone.utc).isoformat()
-          }
-          Path('release.json').write_text(json.dumps(release, separators=(',', ':')) + '\n')
           PY
       - name: Commit patch
         shell: bash
         run: |
           git config user.name "INFO1 live sync bot"
           git config user.email "actions@users.noreply.github.com"
-          git add cloud-sync.js index.html release.json
+          git add cloud-sync.js index.html
           git commit -m "feat: sync study states live across devices"
+          git fetch origin main
+          git rebase origin/main
           git push
