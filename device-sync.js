@@ -30,6 +30,8 @@
   let timerPublishBusy = false;
   let timerPublishQueued = false;
   let timerPendingPublish = false;
+  let timerStateFallbackBusy = false;
+  let timerLastStateRevision = 0;
 
   function parse(raw, fallback = null) {
     try { return raw ? JSON.parse(raw) : fallback; } catch { return fallback; }
@@ -272,7 +274,8 @@
       topic_id: row.topic_id || null,
       started_at: row.started_at || null,
       version: incomingVersion,
-      source_id: row.source_id || null
+      source_id: row.source_id || null,
+      updated_at: row.updated_at || null
     };
 
     try {
@@ -478,6 +481,80 @@
     }
   }
 
+
+  function stateConfirmsClosedLiveSession(remoteState) {
+    const live = timerCanonicalRow;
+    if (!live?.active || !live.topic_id || !live.started_at) return false;
+    const sessions = remoteState?.[live.topic_id]?.sesiones;
+    if (!Array.isArray(sessions)) return false;
+    const liveStart = Date.parse(live.started_at);
+    if (!Number.isFinite(liveStart)) return false;
+    return sessions.some(session => {
+      const start = Date.parse(session?.inicio || '');
+      if (!Number.isFinite(start)) return false;
+      return Math.abs(start - liveStart) <= 2000 && Number(session?.ms || 0) >= 15000;
+    });
+  }
+
+  async function reconcileTimerFromFullState() {
+    if (timerStateFallbackBusy || document.hidden) return false;
+    const sb = window.INFO1_SUPABASE_CLIENT;
+    const ctx = cloudContext();
+    if (!sb || !ctx.connected || !ctx.workspaceId) return false;
+
+    timerStateFallbackBusy = true;
+    try {
+      const result = await sb
+        .from('info1_state')
+        .select('state,revision,updated_at')
+        .eq('workspace_id', ctx.workspaceId)
+        .maybeSingle();
+      if (result.error || !result.data) return false;
+
+      const revision = Number(result.data.revision || 0);
+      const remoteState = result.data.state && typeof result.data.state === 'object'
+        ? result.data.state
+        : {};
+      const remoteCrono = remoteState.__crono?.id && remoteState.__crono?.inicio
+        ? remoteState.__crono
+        : null;
+      const remoteSnap = timerSnapshot(remoteCrono);
+      const localSnap = timerSnapshot(currentCrono());
+      const stateUpdatedMs = Date.parse(result.data.updated_at || '') || 0;
+      const liveUpdatedMs = Date.parse(timerCanonicalRow?.updated_at || '') || 0;
+
+      if (revision <= timerLastStateRevision && stateUpdatedMs <= liveUpdatedMs) return false;
+      timerLastStateRevision = Math.max(timerLastStateRevision, revision);
+      if (remoteSnap === localSnap) return false;
+
+      let accept = false;
+      if (!remoteCrono && currentCrono()) {
+        accept = stateConfirmsClosedLiveSession(remoteState);
+      } else if (remoteCrono) {
+        accept = !liveUpdatedMs || stateUpdatedMs > liveUpdatedMs;
+      }
+      if (!accept) return false;
+
+      const synthetic = {
+        active: !!remoteCrono,
+        topic_id: remoteCrono?.id || null,
+        started_at: remoteCrono?.inicio || null,
+        version: timerLastVersion,
+        updated_at: result.data.updated_at || new Date().toISOString(),
+        source_id: 'full-state-fallback'
+      };
+      applySharedTimerRow(synthetic, true);
+      timerPendingPublish = true;
+      await publishSharedTimer();
+      return true;
+    } catch (e) {
+      console.warn('INFO1 timer full-state fallback:', e);
+      return false;
+    } finally {
+      timerStateFallbackBusy = false;
+    }
+  }
+
   /* ===== ACTUALIZACIÓN DE APP ===== */
 
   async function checkLatestApp() {
@@ -497,6 +574,9 @@
       if (seen !== release) {
         appUpdateAvailable = true;
         pendingRelease = release;
+        if (!hasUnsyncedHumanChanges()) {
+          setTimeout(() => reloadForNewAppVersion(true), 650);
+        }
         return true;
       }
       return false;
@@ -508,8 +588,10 @@
     }
   }
 
-  function reloadForNewAppVersion() {
-    if (!appUpdateAvailable || hasUnsyncedHumanChanges() || hasActiveChrono()) return false;
+  function reloadForNewAppVersion(force = false) {
+    if (!appUpdateAvailable || hasUnsyncedHumanChanges()) return false;
+    if (hasActiveChrono() && !force) return false;
+    window.__INFO1_UPDATING_APP__ = true;
     if (pendingRelease) localStorage.setItem(RELEASE_KEY, pendingRelease);
     const url = new URL(location.href);
     url.searchParams.set('_info1version', Date.now().toString());
@@ -625,6 +707,7 @@
     applyStateLive,
     setupSharedTimer,
     pollSharedTimer,
+    reconcileTimerFromFullState,
     publishSharedTimer,
     get status() {
       return {
@@ -658,7 +741,8 @@
     pollSharedTimer();
   }, 1500);
 
-  setInterval(checkLatestApp, 45000);
+  setInterval(reconcileTimerFromFullState, 1200);
+  setInterval(checkLatestApp, 10000);
 
   installPullToRefresh();
   patchSaveForSharedTimer();

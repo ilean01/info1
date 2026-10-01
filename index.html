@@ -1335,6 +1335,7 @@ function closeModal(){
 }
 
 window.addEventListener("pagehide",()=>{
+  if(window.__INFO1_UPDATING_APP__)return;
   const id=currentEdit?.id;
   if(id&&activeCrono()?.id===id)stopFichaTimer(id);
 });
@@ -1787,7 +1788,7 @@ setInterval(renderToday,30000);
 <script src="./supabase-config.js?v=stable-20260925-3"></script>
 <script src="./cloud-sync.js?v=stable-20260925-3"></script>
 <script src="./cloud-settings-ui.js?v=20260925-2"></script>
-<script src="./device-sync.js?v=20261001-live3"></script>
+<script src="./device-sync.js?v=20261001-live4"></script>
 <script src="./supabase-media-bridge.js?v=stable-20260925-3"></script>
 
 <script>
