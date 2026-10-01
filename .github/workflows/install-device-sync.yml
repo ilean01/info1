@@ -15,99 +15,21 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Fix repeated cloud conflict
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          cloud = Path('cloud-sync.js')
-          s = cloud.read_text(encoding='utf-8')
-
-          target1 = """    if (remoteRaw === here || (!here && remoteRaw === '{}')) {
-      localStorage.setItem(`${HYDRATED_PREFIX}${workspace.id}`, String(remoteRevision));
-      localStorage.removeItem(UNSYNCED_KEY);
-      dirty = false;
-      conflict = false;
-      lastSeenRaw = here;
-      showSyncedBadge();
-      return;
-    }
-
-    // Antes se aplicaba la nube automáticamente durante el arranque. Ese era
-"""
-          repl1 = """    const hydratedRevision = Number(localStorage.getItem(`${HYDRATED_PREFIX}${workspace.id}`) || 0);
-    const hasUnsyncedLocal = localStorage.getItem(UNSYNCED_KEY) === '1';
-
-    // If this device already accepted this exact revision and there are no
-    // pending local edits, startup normalization is not a real conflict.
-    if (hydratedRevision === remoteRevision && !hasUnsyncedLocal) {
-      dirty = false;
-      conflict = false;
-      lastSeenRaw = here;
-      showSyncedBadge();
-      return;
-    }
-
-    if (remoteRaw === here || (!here && remoteRaw === '{}')) {
-      localStorage.setItem(`${HYDRATED_PREFIX}${workspace.id}`, String(remoteRevision));
-      localStorage.removeItem(UNSYNCED_KEY);
-      dirty = false;
-      conflict = false;
-      lastSeenRaw = here;
-      showSyncedBadge();
-      return;
-    }
-
-    // Antes se aplicaba la nube automáticamente durante el arranque. Ese era
-"""
-          if target1 in s:
-              s = s.replace(target1, repl1, 1)
-
-          target2 = """      badge(
-        `☁️ Copia de Supabase guardada en este dispositivo · rev ${remoteRevision}. Actualizá la pantalla para mostrarla.`,
-        'ok',
-        '<button class=\"primary\" id=\"info1ReloadCloud\">Actualizar pantalla</button><button id=\"info1ImportBackup\">Importar backup</button>'
-      );
-      bindStandardActions();
-"""
-          repl2 = """      showSyncedBadge(`☁️ Nube aplicada correctamente · rev ${remoteRevision}`);
-
-      if (userInitiated) {
-        const url = new URL(location.href);
-        url.searchParams.set('_info1cloud', String(Date.now()));
-        setTimeout(() => location.replace(url.toString()), 180);
-      }
-"""
-          if target2 in s:
-              s = s.replace(target2, repl2, 1)
-
-          cloud.write_text(s, encoding='utf-8')
-
-          idx = Path('index.html')
-          html = idx.read_text(encoding='utf-8')
-          html = html.replace('./cloud-sync.js?v=stable-20260925-3', './cloud-sync.js?v=cloudfix-20260930-2')
-          html = html.replace('./cloud-sync.js?v=cloudfix-20260930-1', './cloud-sync.js?v=cloudfix-20260930-2')
-          html = html.replace('./device-sync.js?v=20260925-1', './device-sync.js?v=cloudfix-20260930-2')
-          html = html.replace('./device-sync.js?v=cloudfix-20260930-1', './device-sync.js?v=cloudfix-20260930-2')
-          idx.write_text(html, encoding='utf-8')
-          PY
-      - name: Commit cloud conflict fix
+      - name: Install mobile sync v4
+        run: python3 scripts/mobile-sync-v4.py
+      - name: Commit mobile sync v4
         shell: bash
         run: |
           git config user.name 'INFO1 sync bot'
           git config user.email 'actions@users.noreply.github.com'
-          git add cloud-sync.js index.html
+          git add device-sync.js index.html
           if git diff --cached --quiet; then
             echo 'No changes to commit'
             exit 0
           fi
-          git commit -m 'fix: stop repeated Supabase conflict after loading cloud'
+          git commit -m 'fix: auto-update mobile and bridge timer stop from old clients'
           for attempt in 1 2 3 4 5; do
-            git pull --rebase origin main || true
-            if git push; then
-              exit 0
-            fi
+            git pull --rebase origin main && git push && exit 0
             sleep $((attempt * 2))
           done
           exit 1
