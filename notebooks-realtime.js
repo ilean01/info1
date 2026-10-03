@@ -2031,6 +2031,12 @@
           const a = (Math.PI * 2 * i) / 36;
           synthetic.push({x:cx + Math.cos(a)*rx,y:cy + Math.sin(a)*ry});
         }
+      } else if (stroke.shapeType === 'rectangle') {
+        const x1=Math.min(d.x1,d.x2),x2=Math.max(d.x1,d.x2),y1=Math.min(d.y1,d.y2),y2=Math.max(d.y1,d.y2);
+        synthetic.push({x:x1,y:y1},{x:x2,y:y1},{x:x2,y:y2},{x:x1,y:y2},{x:x1,y:y1});
+      } else if (stroke.shapeType === 'triangle') {
+        const x1=(d.x1+d.x2)/2,y1=Math.min(d.y1,d.y2),x2=Math.min(d.x1,d.x2),y2=Math.max(d.y1,d.y2),x3=Math.max(d.x1,d.x2);
+        synthetic.push({x:x1,y:y1},{x:x2,y:y2},{x:x3,y:y2},{x:x1,y:y1});
       }
       for (let i = 1; i < synthetic.length; i++) {
         if (pointSegmentDistancePx(
@@ -2737,10 +2743,32 @@
       if (!store.notebooks[m.notebookId]) {
         broadcast('snapshot-request', { notebookId: m.notebookId });
       }
-      if (followMode) {
-        if (store.notebooks[m.notebookId]) openNotebook(m.notebookId, m.pageId, true, false);
+      if (followMode && store.notebooks[m.notebookId]) {
+        const remoteNb = store.notebooks[m.notebookId];
+        const remotePage = getPage(remoteNb, m.pageId);
+        if (remotePage) {
+          if (Number.isFinite(Number(m.zoom))) remotePage.zoom = clamp(Number(m.zoom), 0.45, 3.5);
+          if (Number.isFinite(Number(m.scrollY))) remotePage.scrollY = Math.max(0, Number(m.scrollY));
+          if (Number.isFinite(Number(m.scrollX))) remotePage.scrollX = Math.max(0, Number(m.scrollX));
+        }
+        if (currentNotebookId !== m.notebookId || currentPageId !== m.pageId) {
+          openNotebook(m.notebookId, m.pageId, true, false);
+        } else {
+          readOnly = true;
+          if (remotePage) {
+            applyCanvasGeometry(remotePage);
+            restorePageViewport(remotePage);
+            renderPages();
+            redraw();
+          }
+        }
       } else if (currentNotebookId === m.notebookId && m.pageId && currentPageId !== m.pageId && readOnly) {
         currentPageId = m.pageId;
+        const p = getPage(store.notebooks[m.notebookId], m.pageId);
+        if (p) {
+          applyCanvasGeometry(p);
+          restorePageViewport(p);
+        }
         renderPages();
         redraw();
       }
@@ -2863,6 +2891,19 @@
       return;
     }
 
+    if (m.kind === 'page-layout') {
+      const layoutPage = getPage(nb, m.pageId);
+      if (layoutPage) {
+        if (Number.isFinite(Number(m.height))) layoutPage.height = Math.max(INITIAL_PAGE_HEIGHT, Number(m.height));
+        if (Number.isFinite(Number(m.zoom))) layoutPage.zoom = clamp(Number(m.zoom), 0.45, 3.5);
+        if (currentNotebookId === nb.id && currentPageId === layoutPage.id) {
+          applyCanvasGeometry(layoutPage);
+          redraw();
+        }
+      }
+      return;
+    }
+
     if (m.kind === 'page-added' && m.page) {
       if (!Array.isArray(nb.pages)) nb.pages = [];
       if (!nb.pages.some(function(p) { return p.id === m.page.id; })) nb.pages.push(m.page);
@@ -2901,6 +2942,31 @@
       return;
     }
 
+    if (m.kind === 'stroke-final' && m.stroke && m.stroke.id) {
+      const key = nb.id + ':' + page.id + ':' + m.stroke.id;
+      remoteDrafts.delete(key);
+      const index = page.strokes.findIndex(function(s) { return s.id === m.stroke.id; });
+      if (index >= 0) page.strokes[index] = JSON.parse(JSON.stringify(m.stroke));
+      else page.strokes.push(JSON.parse(JSON.stringify(m.stroke)));
+      page.redoStack = [];
+      nb.updatedAt = new Date().toISOString();
+      redraw();
+      refreshPageManagerPreviews();
+      renderNotebookList();
+      return;
+    }
+
+    if (m.kind === 'stroke-restored' && m.stroke && m.stroke.id) {
+      if (!page.strokes.some(function(s) { return s.id === m.stroke.id; })) {
+        page.strokes.push(JSON.parse(JSON.stringify(m.stroke)));
+      }
+      nb.updatedAt = new Date().toISOString();
+      redraw();
+      refreshPageManagerPreviews();
+      renderNotebookList();
+      return;
+    }
+
     if (m.kind === 'stroke-end') {
       const key = nb.id + ':' + page.id + ':' + m.strokeId;
       const draft = remoteDrafts.get(key);
@@ -2935,6 +3001,7 @@
 
     if (m.kind === 'page-cleared') {
       page.strokes = [];
+      page.redoStack = [];
       redraw();
       refreshPageManagerPreviews();
       renderNotebookList();
@@ -3047,6 +3114,12 @@
       duplicate: duplicateNotebook,
       duplicatePage: duplicatePage,
       renamePage: renamePage,
+      redo: redo,
+      setZoom: function(value) {
+        const nb = getNotebook(currentNotebookId);
+        const page = getPage(nb, currentPageId);
+        if (page) setPageZoom(page, value);
+      },
       createFolder: function(parentId) { return createFolder(parentId || null); },
       moveToFolder: setNotebookFolder,
       folders: function() { const store = ensureStore(); return store.folderOrder.map(function(id) { return store.folders[id]; }).filter(Boolean); },
