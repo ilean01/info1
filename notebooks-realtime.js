@@ -3901,6 +3901,8 @@
         cloudContext: cloudContext,
         isChannelReady: function() { return channelReady; },
         currentPage: function() { return getPage(getNotebook(currentNotebookId), currentPageId); },
+        mediaAssets: function() { return ensureStore().mediaAssets; },
+        currentNotebook: function() { return getNotebook(currentNotebookId); },
         refresh: function() {
           renderImageLayer();
           redraw();
