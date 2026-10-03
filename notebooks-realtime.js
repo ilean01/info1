@@ -2376,6 +2376,9 @@
 
   function startImageMove(e, image, el) {
     if (readOnly || image.locked || image.background) return;
+    const collab = window.INFO1_NOTEBOOK_COLLABORATION;
+    const collabKey = 'image:' + image.id;
+    if (collab && collab.claimObject && !collab.claimObject(collabKey)) return;
     e.stopPropagation();
     e.preventDefault();
     selectedImageId = image.id;
@@ -2385,6 +2388,7 @@
     imageGesture = {type:'move',id:image.id};
     function move(ev) {
       if (ev.pointerId !== e.pointerId) return;
+      if (collab && collab.ownsObject && !collab.ownsObject(collabKey)) return;
       image.x = clamp(start.ix + (ev.clientX-start.x)/Math.max(0.001,scale), 0, Math.max(0,LOGICAL_WIDTH-image.w));
       image.y = Math.max(0, start.iy + (ev.clientY-start.y)/Math.max(0.001,scale));
       applyImageStyle(el,image,scale);
@@ -2400,7 +2404,9 @@
       el.removeEventListener('pointerup',end);
       el.removeEventListener('pointercancel',end);
       imageGesture = null;
-      commitImageChange(getPage(getNotebook(currentNotebookId),currentPageId));
+      const stillOwns = !collab || !collab.ownsObject || collab.ownsObject(collabKey);
+      if (stillOwns) commitImageChange(getPage(getNotebook(currentNotebookId),currentPageId));
+      if (collab && collab.releaseObject) collab.releaseObject(collabKey);
     }
     el.addEventListener('pointermove',move,{passive:false});
     el.addEventListener('pointerup',end);
@@ -2409,6 +2415,9 @@
 
   function startImageResize(e, image, el) {
     if (readOnly || image.locked || image.background) return;
+    const collab = window.INFO1_NOTEBOOK_COLLABORATION;
+    const collabKey = 'image:' + image.id;
+    if (collab && collab.claimObject && !collab.claimObject(collabKey)) return;
     e.stopPropagation();
     e.preventDefault();
     const scale = currentCanvasScale();
@@ -2416,6 +2425,7 @@
     const aspect = Math.max(0.05,image.w/Math.max(1,image.h));
     function move(ev) {
       if (ev.pointerId !== e.pointerId) return;
+      if (collab && collab.ownsObject && !collab.ownsObject(collabKey)) return;
       const dw = (ev.clientX-start.x)/Math.max(0.001,scale);
       const dh = (ev.clientY-start.y)/Math.max(0.001,scale);
       let w = Math.max(60,start.w + Math.max(dw,dh*aspect));
@@ -2433,7 +2443,9 @@
       window.removeEventListener('pointermove',move,true);
       window.removeEventListener('pointerup',end,true);
       window.removeEventListener('pointercancel',end,true);
-      commitImageChange(getPage(getNotebook(currentNotebookId),currentPageId));
+      const stillOwns = !collab || !collab.ownsObject || collab.ownsObject(collabKey);
+      if (stillOwns) commitImageChange(getPage(getNotebook(currentNotebookId),currentPageId));
+      if (collab && collab.releaseObject) collab.releaseObject(collabKey);
     }
     window.addEventListener('pointermove',move,{capture:true,passive:false});
     window.addEventListener('pointerup',end,true);
@@ -2442,6 +2454,9 @@
 
   function startImageRotate(e, image, el) {
     if (readOnly || image.locked || image.background) return;
+    const collab = window.INFO1_NOTEBOOK_COLLABORATION;
+    const collabKey = 'image:' + image.id;
+    if (collab && collab.claimObject && !collab.claimObject(collabKey)) return;
     e.stopPropagation();
     e.preventDefault();
     const r = el.getBoundingClientRect();
@@ -2450,6 +2465,7 @@
     const base = Number(image.rotation)||0;
     function move(ev) {
       if (ev.pointerId !== e.pointerId) return;
+      if (collab && collab.ownsObject && !collab.ownsObject(collabKey)) return;
       const angle = Math.atan2(ev.clientY-cy,ev.clientX-cx)*180/Math.PI;
       image.rotation = base + angle-initialAngle;
       applyImageStyle(el,image,currentCanvasScale());
@@ -2463,7 +2479,9 @@
       window.removeEventListener('pointermove',move,true);
       window.removeEventListener('pointerup',end,true);
       window.removeEventListener('pointercancel',end,true);
-      commitImageChange(getPage(getNotebook(currentNotebookId),currentPageId));
+      const stillOwns = !collab || !collab.ownsObject || collab.ownsObject(collabKey);
+      if (stillOwns) commitImageChange(getPage(getNotebook(currentNotebookId),currentPageId));
+      if (collab && collab.releaseObject) collab.releaseObject(collabKey);
     }
     window.addEventListener('pointermove',move,{capture:true,passive:false});
     window.addEventListener('pointerup',end,true);
@@ -3057,6 +3075,9 @@
         color: document.getElementById('nbColor').value || '#16264a',
         width: tool === 'highlighter' ? Math.max(10, width * 3) : width,
         startedAt: Date.now(),
+        author: window.INFO1_NOTEBOOK_COLLABORATION && window.INFO1_NOTEBOOK_COLLABORATION.authorStamp
+          ? window.INFO1_NOTEBOOK_COLLABORATION.authorStamp()
+          : null,
         points: [startPoint]
       };
       if (tool === 'line') {
