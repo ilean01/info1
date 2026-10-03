@@ -613,12 +613,30 @@
     page.images=(page.images||[]).filter(i=>!selectedImages.has(i.id));
   }
 
+  function selectionCollabKeys() {
+    return [
+      ...Array.from(selectedStrokes).map(id=>'stroke:'+id),
+      ...Array.from(selectedImages).map(id=>'image:'+id)
+    ];
+  }
+
+  function withSelectionLocks(fn) {
+    const collab=window.INFO1_NOTEBOOK_COLLABORATION;
+    const keys=selectionCollabKeys();
+    if (collab && collab.claimObjects && !collab.claimObjects(keys)) return false;
+    try { fn(); }
+    finally { if (collab && collab.releaseObjects) setTimeout(()=>collab.releaseObjects(keys),50); }
+    return true;
+  }
+
   function deleteSelection(silent=false) {
     const page=currentPage();
     if (!page || !hasSelection() || isReadOnly()) return;
-    removeSelectionFromPage(page);
-    clearSelection(false);
-    commitCurrent(silent?'':'Selección eliminada');
+    withSelectionLocks(()=>{
+      removeSelectionFromPage(page);
+      clearSelection(false);
+      commitCurrent(silent?'':'Selección eliminada');
+    });
   }
 
   function cutSelection() {
@@ -631,18 +649,22 @@
   function groupSelection() {
     const page=currentPage();
     if (!page || selectionCount()<2 || isReadOnly()) return toast('Seleccioná al menos dos elementos');
-    const groupId='grp-'+uuid();
-    selectedItems(page).strokes.forEach(s=>s.groupId=groupId);
-    selectedItems(page).images.forEach(i=>i.groupId=groupId);
-    commitCurrent('Elementos agrupados');
+    withSelectionLocks(()=>{
+      const groupId='grp-'+uuid();
+      selectedItems(page).strokes.forEach(s=>s.groupId=groupId);
+      selectedItems(page).images.forEach(i=>i.groupId=groupId);
+      commitCurrent('Elementos agrupados');
+    });
   }
 
   function ungroupSelection() {
     const page=currentPage();
     if (!page || !hasSelection() || isReadOnly()) return;
-    selectedItems(page).strokes.forEach(s=>delete s.groupId);
-    selectedItems(page).images.forEach(i=>delete i.groupId);
-    commitCurrent('Elementos desagrupados');
+    withSelectionLocks(()=>{
+      selectedItems(page).strokes.forEach(s=>delete s.groupId);
+      selectedItems(page).images.forEach(i=>delete i.groupId);
+      commitCurrent('Elementos desagrupados');
+    });
   }
 
   function translateStroke(stroke,dx,dy) {
@@ -760,9 +782,18 @@
 
   function startTransform(e,type) {
     if (!hasSelection() || isReadOnly()) return;
+    const collab=window.INFO1_NOTEBOOK_COLLABORATION;
+    const collabKeys=[
+      ...Array.from(selectedStrokes).map(id=>'stroke:'+id),
+      ...Array.from(selectedImages).map(id=>'image:'+id)
+    ];
+    if (collab && collab.claimObjects && !collab.claimObjects(collabKeys)) return;
     stopEvent(e);
     const snapshot=captureSnapshot();
-    if (!snapshot) return;
+    if (!snapshot) {
+      if (collab && collab.releaseObjects) collab.releaseObjects(collabKeys);
+      return;
+    }
     const sessionId='tr-'+uuid();
     const r=resilience(), nb=currentNotebook(), page=currentPage();
     if (r && r.syncSelectionTransform && nb && page) {
@@ -781,6 +812,7 @@
 
     const move=ev => {
       if (ev.pointerId!==e.pointerId) return;
+      if (collab && collab.ownsObjects && !collab.ownsObjects(collabKeys)) return;
       stopEvent(ev);
       if (type==='move') {
         const dx=(ev.clientX-start.x)/k, dy=(ev.clientY-start.y)/k;
@@ -817,20 +849,26 @@
       window.removeEventListener('pointermove',move,true);
       window.removeEventListener('pointerup',end,true);
       window.removeEventListener('pointercancel',end,true);
-      if (type==='move') {
-        applyTransformSnapshot(snapshot,'move',{dx:(ev.clientX-start.x)/k,dy:(ev.clientY-start.y)/k});
-      } else if (type==='resize') {
-        const dx=(ev.clientX-start.x)/k,dy=(ev.clientY-start.y)/k;
-        const f=clamp(Math.max((snapshot.bounds.width+dx)/snapshot.bounds.width,(snapshot.bounds.height+dy)/snapshot.bounds.height),.2,5);
-        applyTransformSnapshot(snapshot,'resize',{factor:f});
+      const stillOwns=!collab || !collab.ownsObjects || collab.ownsObjects(collabKeys);
+      if (stillOwns) {
+        if (type==='move') {
+          applyTransformSnapshot(snapshot,'move',{dx:(ev.clientX-start.x)/k,dy:(ev.clientY-start.y)/k});
+        } else if (type==='resize') {
+          const dx=(ev.clientX-start.x)/k,dy=(ev.clientY-start.y)/k;
+          const f=clamp(Math.max((snapshot.bounds.width+dx)/snapshot.bounds.width,(snapshot.bounds.height+dy)/snapshot.bounds.height),.2,5);
+          applyTransformSnapshot(snapshot,'resize',{factor:f});
+        } else {
+          const angle=Math.atan2(ev.clientY-center.y,ev.clientX-center.x)*180/Math.PI-startAngle;
+          applyTransformSnapshot(snapshot,'rotate',{angle});
+        }
+        commitCurrent(type==='move'?'Selección movida':type==='resize'?'Selección redimensionada':'Selección rotada');
+        if (r && r.syncSelectionTransform && nb && page) {
+          r.syncSelectionTransform(nb.id,page.id,{sessionId:sessionId,phase:'end',type:type});
+        }
       } else {
-        const angle=Math.atan2(ev.clientY-center.y,ev.clientX-center.x)*180/Math.PI-startAngle;
-        applyTransformSnapshot(snapshot,'rotate',{angle});
+        refreshEditor();
       }
-      commitCurrent(type==='move'?'Selección movida':type==='resize'?'Selección redimensionada':'Selección rotada');
-      if (r && r.syncSelectionTransform && nb && page) {
-        r.syncSelectionTransform(nb.id,page.id,{sessionId:sessionId,phase:'end',type:type});
-      }
+      if (collab && collab.releaseObjects) collab.releaseObjects(collabKeys);
     };
 
     window.addEventListener('pointermove',move,{capture:true,passive:false});
@@ -848,15 +886,17 @@
     if (raw===null) return;
     const target=pages[Number(raw)-1];
     if (!target) return toast('Hoja inválida');
-    const items=selectedItems(source);
-    removeSelectionFromPage(source);
-    if (!Array.isArray(target.strokes)) target.strokes=[];
-    if (!Array.isArray(target.images)) target.images=[];
-    target.strokes.push(...items.strokes);
-    target.images.push(...items.images);
-    clearSelection(false);
-    saveChanges([nb],'Selección movida a '+target.title);
-    refreshEditor();
+    withSelectionLocks(()=>{
+      const items=selectedItems(source);
+      removeSelectionFromPage(source);
+      if (!Array.isArray(target.strokes)) target.strokes=[];
+      if (!Array.isArray(target.images)) target.images=[];
+      target.strokes.push(...items.strokes);
+      target.images.push(...items.images);
+      clearSelection(false);
+      saveChanges([nb],'Selección movida a '+target.title);
+      refreshEditor();
+    });
   }
 
   function copySelectionToNotebook() {
@@ -964,6 +1004,7 @@
       group:groupSelection,
       ungroup:ungroupSelection,
       delete:deleteSelection,
+      get ids(){return {strokeIds:Array.from(selectedStrokes),imageIds:Array.from(selectedImages)};},
       get count(){return selectionCount();},
       get active(){return selectionMode;}
     };
