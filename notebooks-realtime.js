@@ -7,6 +7,13 @@
   const FOLLOW_KEY = 'info1-notebook-follow-v1';
   const OPEN_KEY = 'info1-notebook-open-v1';
   const ERASER_MODE_KEY = 'info1-notebook-eraser-mode-v1';
+  const PENCIL_MODE_KEY = 'info1-notebook-finger-mode-v1';
+  const BRUSH_KEY = 'info1-notebook-brush-v1';
+  const LOGICAL_WIDTH = 1000;
+  const INITIAL_PAGE_HEIGHT = 1600;
+  const PAGE_GROW_BY = 1200;
+  const MAX_CANVAS_PIXELS = 14000000;
+  const MAX_CANVAS_DIMENSION = 15000;
   const CHANNEL_VERSION = 'v1';
 
   let currentNotebookId = null;
@@ -35,6 +42,14 @@
   let eraserMode = localStorage.getItem(ERASER_MODE_KEY) === 'stroke' ? 'stroke' : 'pixel';
   let strokeEraseActive = false;
   let strokeEraseSeen = new Set();
+  let fingerPanMode = localStorage.getItem(PENCIL_MODE_KEY) !== 'draw';
+  let currentBrush = localStorage.getItem(BRUSH_KEY) || 'ballpoint';
+  let activePointers = new Map();
+  let gestureState = null;
+  let drawPointerId = null;
+  let shapeHoldTimer = null;
+  let scrollPersistTimer = null;
+  let pencilDetected = false;
 
   function uuid() {
     return crypto && crypto.randomUUID
@@ -63,6 +78,56 @@
     }
   }
 
+  function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function normalizePage(page) {
+    if (!page || typeof page !== 'object') return page;
+    if (!Array.isArray(page.strokes)) page.strokes = [];
+    if (page.coordVersion !== 2) {
+      page.strokes.forEach(function(stroke) {
+        if (!stroke || !Array.isArray(stroke.points)) return;
+        stroke.points.forEach(function(point) {
+          if (!point || typeof point.y !== 'number') return;
+          point.y = point.y * INITIAL_PAGE_HEIGHT;
+        });
+        stroke.coordVersion = 2;
+      });
+      page.coordVersion = 2;
+      page.height = Number(page.height) > 0 ? Number(page.height) : INITIAL_PAGE_HEIGHT;
+    }
+    page.height = Math.max(INITIAL_PAGE_HEIGHT, Number(page.height) || INITIAL_PAGE_HEIGHT);
+    page.zoom = clamp(Number(page.zoom) || 1, 0.45, 3.5);
+    page.scrollY = Math.max(0, Number(page.scrollY) || 0);
+    page.scrollX = Math.max(0, Number(page.scrollX) || 0);
+    if (!Array.isArray(page.redoStack)) page.redoStack = [];
+    page.strokes.forEach(function(stroke) {
+      if (stroke && !stroke.coordVersion) stroke.coordVersion = 2;
+    });
+    return page;
+  }
+
+  function normalizeNotebookPages(nb) {
+    if (!nb || typeof nb !== 'object') return nb;
+    if (!Array.isArray(nb.pages) || !nb.pages.length) {
+      nb.pages = [{
+        id: uuid(),
+        title: 'Página 1',
+        createdAt: new Date().toISOString(),
+        strokes: [],
+        coordVersion: 2,
+        height: INITIAL_PAGE_HEIGHT,
+        zoom: 1,
+        scrollY: 0,
+        scrollX: 0,
+        redoStack: []
+      }];
+    }
+    nb.pages.forEach(normalizePage);
+    return nb;
+  }
+
   function ensureStore() {
     const s = appState();
     if (!s[STORE_KEY] || typeof s[STORE_KEY] !== 'object') {
@@ -88,6 +153,7 @@
       if (!folder.color) folder.color = '#315a9b';
       if (folder.parentId && !store.folders[folder.parentId]) folder.parentId = null;
     });
+    Object.values(store.notebooks).forEach(normalizeNotebookPages);
     return store;
   }
 
@@ -137,7 +203,8 @@
 
   function getPage(nb, pageId) {
     if (!nb || !Array.isArray(nb.pages)) return null;
-    return nb.pages.find(p => p.id === pageId) || nb.pages[0] || null;
+    const page = nb.pages.find(p => p.id === pageId) || nb.pages[0] || null;
+    return normalizePage(page);
   }
 
   function topicNotebookList(topicId) {
@@ -333,7 +400,13 @@
         id: pageId,
         title: 'Página 1',
         createdAt,
-        strokes: []
+        strokes: [],
+        coordVersion: 2,
+        height: INITIAL_PAGE_HEIGHT,
+        zoom: 1,
+        scrollY: 0,
+        scrollX: 0,
+        redoStack: []
       }]
     };
     store.notebooks[id] = nb;
@@ -419,29 +492,74 @@
     return copy;
   }
 
-  function drawPreviewStroke(ctx2, stroke, width, height) {
+  function drawShapePath(ctx2, stroke, mapX, mapY) {
+    const d = stroke && stroke.shapeData;
+    if (!d || !stroke.shapeType) return false;
+    ctx2.beginPath();
+    if (stroke.shapeType === 'line') {
+      ctx2.moveTo(mapX(d.x1), mapY(d.y1));
+      ctx2.lineTo(mapX(d.x2), mapY(d.y2));
+    } else if (stroke.shapeType === 'circle') {
+      const left = mapX(Math.min(d.x1, d.x2));
+      const right = mapX(Math.max(d.x1, d.x2));
+      const top = mapY(Math.min(d.y1, d.y2));
+      const bottom = mapY(Math.max(d.y1, d.y2));
+      ctx2.ellipse((left + right) / 2, (top + bottom) / 2, Math.abs(right - left) / 2, Math.abs(bottom - top) / 2, 0, 0, Math.PI * 2);
+    } else if (stroke.shapeType === 'rectangle') {
+      const x = mapX(Math.min(d.x1, d.x2));
+      const y = mapY(Math.min(d.y1, d.y2));
+      const w = Math.abs(mapX(d.x2) - mapX(d.x1));
+      const h = Math.abs(mapY(d.y2) - mapY(d.y1));
+      ctx2.rect(x, y, w, h);
+    } else if (stroke.shapeType === 'triangle') {
+      const x1 = mapX((d.x1 + d.x2) / 2);
+      const y1 = mapY(Math.min(d.y1, d.y2));
+      const x2 = mapX(Math.min(d.x1, d.x2));
+      const y2 = mapY(Math.max(d.y1, d.y2));
+      const x3 = mapX(Math.max(d.x1, d.x2));
+      const y3 = y2;
+      ctx2.moveTo(x1, y1);
+      ctx2.lineTo(x2, y2);
+      ctx2.lineTo(x3, y3);
+      ctx2.closePath();
+    } else {
+      return false;
+    }
+    return true;
+  }
+
+  function drawPreviewStroke(ctx2, stroke, width, height, pageHeight) {
     if (!stroke || !Array.isArray(stroke.points) || !stroke.points.length) return;
+    pageHeight = Math.max(INITIAL_PAGE_HEIGHT, Number(pageHeight) || INITIAL_PAGE_HEIGHT);
+    const mapX = function(x) { return x * width; };
+    const mapY = function(y) { return (y / pageHeight) * height; };
     const pts = stroke.points;
     ctx2.save();
     ctx2.lineCap = 'round';
     ctx2.lineJoin = 'round';
     ctx2.globalCompositeOperation = stroke.tool === 'eraser' ? 'destination-out' : 'source-over';
+    ctx2.globalAlpha = stroke.tool === 'highlighter' ? 0.30 : (stroke.brush === 'pencil' ? 0.72 : 1);
     ctx2.strokeStyle = stroke.color || '#16264a';
-    ctx2.lineWidth = Math.max(1, Number(stroke.width || 4) * 0.72);
+    ctx2.lineWidth = Math.max(0.8, Number(stroke.width || 4) * (stroke.tool === 'highlighter' ? 1.8 : 0.72));
+    if (drawShapePath(ctx2, stroke, mapX, mapY)) {
+      ctx2.stroke();
+      ctx2.restore();
+      return;
+    }
     ctx2.beginPath();
-    ctx2.moveTo(pts[0].x * width, pts[0].y * height);
+    ctx2.moveTo(mapX(pts[0].x), mapY(pts[0].y));
     if (pts.length === 1) {
-      ctx2.lineTo(pts[0].x * width + 0.01, pts[0].y * height + 0.01);
+      ctx2.lineTo(mapX(pts[0].x) + 0.01, mapY(pts[0].y) + 0.01);
     } else {
       for (let i = 1; i < pts.length; i++) {
         const prev = pts[i - 1];
         const p = pts[i];
-        const mx = ((prev.x + p.x) / 2) * width;
-        const my = ((prev.y + p.y) / 2) * height;
-        ctx2.quadraticCurveTo(prev.x * width, prev.y * height, mx, my);
+        const mx = mapX((prev.x + p.x) / 2);
+        const my = mapY((prev.y + p.y) / 2);
+        ctx2.quadraticCurveTo(mapX(prev.x), mapY(prev.y), mx, my);
       }
       const last = pts[pts.length - 1];
-      ctx2.lineTo(last.x * width, last.y * height);
+      ctx2.lineTo(mapX(last.x), mapY(last.y));
     }
     ctx2.stroke();
     ctx2.restore();
@@ -475,7 +593,7 @@
     const lctx = layer.getContext('2d');
     const page = nb.pages && nb.pages[0];
     (page && page.strokes ? page.strokes : []).forEach(function(stroke) {
-      drawPreviewStroke(lctx, stroke, width, height);
+      drawPreviewStroke(lctx, stroke, width, height, page ? page.height : INITIAL_PAGE_HEIGHT);
     });
     out.drawImage(layer, 0, 0);
   }
@@ -496,6 +614,12 @@
     copy.id = uuid();
     copy.title = title || ((page && page.title) ? page.title + ' · copia' : 'Página');
     copy.createdAt = now;
+    copy.coordVersion = 2;
+    copy.height = Math.max(INITIAL_PAGE_HEIGHT, Number(copy.height) || INITIAL_PAGE_HEIGHT);
+    copy.zoom = clamp(Number(copy.zoom) || 1, 0.45, 3.5);
+    copy.scrollY = 0;
+    copy.scrollX = 0;
+    copy.redoStack = [];
     copy.strokes = (page && page.strokes ? page.strokes : []).map(function(stroke) {
       const s = JSON.parse(JSON.stringify(stroke));
       s.id = uuid();
@@ -509,7 +633,13 @@
       id: uuid(),
       title: title || 'Página 1',
       createdAt: new Date().toISOString(),
-      strokes: []
+      strokes: [],
+      coordVersion: 2,
+      height: INITIAL_PAGE_HEIGHT,
+      zoom: 1,
+      scrollY: 0,
+      scrollX: 0,
+      redoStack: []
     };
   }
 
@@ -666,7 +796,7 @@
     }
     out.restore();
     (page && page.strokes ? page.strokes : []).forEach(function(stroke) {
-      drawPreviewStroke(out, stroke, width, height);
+      drawPreviewStroke(out, stroke, width, height, page ? page.height : INITIAL_PAGE_HEIGHT);
     });
   }
 
@@ -799,10 +929,28 @@
     const nb = getNotebook(currentNotebookId);
     const page = getPage(nb, currentPageId);
     if (!page || readOnly || !Array.isArray(page.strokes) || !page.strokes.length) return;
+    normalizePage(page);
     const removed = page.strokes.pop();
+    page.redoStack.push(JSON.parse(JSON.stringify(removed)));
     nb.updatedAt = new Date().toISOString();
     persist();
     broadcast('undo', { notebookId: nb.id, pageId: page.id, strokeId: removed.id });
+    redraw();
+    refreshPageManagerPreviews();
+    renderNotebookList();
+  }
+
+  function redo() {
+    const nb = getNotebook(currentNotebookId);
+    const page = getPage(nb, currentPageId);
+    if (!page || readOnly) return;
+    normalizePage(page);
+    const restored = page.redoStack.pop();
+    if (!restored) return;
+    page.strokes.push(restored);
+    nb.updatedAt = new Date().toISOString();
+    persist();
+    broadcast('stroke-restored', { notebookId: nb.id, pageId: page.id, stroke: restored });
     redraw();
     refreshPageManagerPreviews();
     renderNotebookList();
@@ -814,6 +962,7 @@
     if (!page || readOnly || !page.strokes || !page.strokes.length) return;
     if (!confirm('¿Borrar todos los trazos de esta página?')) return;
     page.strokes = [];
+    page.redoStack = [];
     nb.updatedAt = new Date().toISOString();
     persist();
     broadcast('page-cleared', { notebookId: nb.id, pageId: page.id });
@@ -885,8 +1034,11 @@
       '.nb-bottom-pager button:hover{background:#eef2f7}.nb-bottom-pager button:disabled{opacity:.28;cursor:default}' +
       '.nb-bottom-count{display:flex;align-items:center;justify-content:center;min-width:82px;padding:0 12px;font:800 16px/1 system-ui;border-left:1px solid #e1e5ec;border-right:1px solid #e1e5ec;white-space:nowrap}' +
       '@media(max-width:600px){.nb-bottom-pager{bottom:max(10px,env(safe-area-inset-bottom));min-height:54px}.nb-bottom-pager button{min-width:54px;padding:0 13px}.nb-bottom-count{min-width:74px}}' +
-      '.nb-canvas-wrap{position:relative;min-height:62vh;border:1px solid #50617b;border-radius:16px;overflow:hidden;background-color:#fff;background-image:linear-gradient(#dbe4f055 1px,transparent 1px),linear-gradient(90deg,#dbe4f055 1px,transparent 1px);background-size:28px 28px;touch-action:none;box-shadow:0 18px 60px #0005}' +
-      '#info1NotebookCanvas{display:block;width:100%;height:62vh;min-height:500px;touch-action:none;cursor:crosshair}' +
+      '.nb-canvas-wrap{position:relative;height:min(72vh,860px);min-height:520px;border:1px solid #50617b;border-radius:16px;overflow:auto;background:#101827;overscroll-behavior:contain;touch-action:none;box-shadow:0 18px 60px #0005;scrollbar-gutter:stable}' +
+      '.nb-canvas-stage{position:relative;margin:10px auto 80px;background-color:#fff;background-image:linear-gradient(#dbe4f055 1px,transparent 1px),linear-gradient(90deg,#dbe4f055 1px,transparent 1px);background-size:28px 28px;box-shadow:0 8px 32px #0005;transform-origin:0 0}' +
+      '#info1NotebookCanvas{display:block;width:100%;height:100%;touch-action:none;cursor:crosshair}' +
+      '.nb-canvas-hint{position:sticky;left:12px;top:10px;z-index:4;display:inline-flex;background:#071126dd;color:#dbeafe;border:1px solid #ffffff22;border-radius:999px;padding:6px 9px;font:800 11px system-ui;pointer-events:none;backdrop-filter:blur(6px)}' +
+      '@media(max-width:700px){.nb-canvas-wrap{height:68vh;min-height:460px}.nb-canvas-stage{margin-top:6px}}' +
       '.nb-readonly-banner{position:absolute;top:10px;right:10px;z-index:2;background:#09101fdd;color:#fff;border:1px solid #6b7d9c;border-radius:999px;padding:7px 10px;font:800 12px system-ui;pointer-events:none}' +
       '.nb-live{font-size:12px;color:#9fb0cf}.nb-live.ok{color:#7fe3ba}.nb-live.warn{color:#ffe18a}' +
       '.nb-status-toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:30000;background:#09101ff2;color:#fff;border:1px solid #4b628e;border-radius:999px;padding:9px 13px;font:800 12px system-ui;box-shadow:0 10px 35px #0008}' +
@@ -1475,6 +1627,19 @@
       '</div>' +
       '<div class="nb-toolbar">' +
         '<button id="nbPen" class="active" type="button">✏️ Lápiz</button>' +
+        '<select id="nbBrush" aria-label="Tipo de lápiz">' +
+          '<option value="ballpoint">Bolígrafo</option>' +
+          '<option value="fountain">Pluma</option>' +
+          '<option value="pencil">Lápiz grafito</option>' +
+        '</select>' +
+        '<button id="nbHighlighter" type="button">🖍️ Resaltador</button>' +
+        '<button id="nbLine" type="button">📏 Línea</button>' +
+        '<select id="nbShape" aria-label="Forma geométrica">' +
+          '<option value="">⬡ Formas</option>' +
+          '<option value="circle">◯ Círculo</option>' +
+          '<option value="rectangle">▭ Rectángulo</option>' +
+          '<option value="triangle">△ Triángulo</option>' +
+        '</select>' +
         '<button id="nbEraser" type="button">🧽 Borrador</button>' +
         '<select id="nbEraserMode" aria-label="Modo del borrador">' +
           '<option value="pixel">Borrar parte</option>' +
@@ -1483,13 +1648,21 @@
         '<input id="nbColor" type="color" value="#16264a" aria-label="Color">' +
         '<label class="small">Grosor <input id="nbWidth" type="range" min="1" max="18" value="4"></label>' +
         '<button id="nbUndo" type="button">↶ Deshacer</button>' +
+        '<button id="nbRedo" type="button">↷ Rehacer</button>' +
+        '<button id="nbZoomOut" type="button" title="Alejar">−</button>' +
+        '<button id="nbZoomLabel" type="button" title="Restablecer zoom">100%</button>' +
+        '<button id="nbZoomIn" type="button" title="Acercar">＋</button>' +
+        '<button id="nbFingerMode" type="button">☝️ Dedo mueve</button>' +
         '<button id="nbClear" type="button">Limpiar página</button>' +
         '<button id="nbAddPage" type="button">＋ Página</button>' +
         '<button id="nbDeletePage" type="button">🗑 Página</button>' +
         '<button id="nbMode" type="button">' + (readOnly ? '🔒 Solo lectura' : '✍️ Editar') + '</button>' +
       '</div>' +
-      '<div class="nb-canvas-wrap">' +
-        '<canvas id="info1NotebookCanvas"></canvas>' +
+      '<div id="nbCanvasScroller" class="nb-canvas-wrap">' +
+        '<div class="nb-canvas-hint">Pencil escribe · dedo mueve · pellizcá para zoom</div>' +
+        '<div id="nbCanvasStage" class="nb-canvas-stage">' +
+          '<canvas id="info1NotebookCanvas"></canvas>' +
+        '</div>' +
         (readOnly ? '<div class="nb-readonly-banner">👀 Solo lectura · viendo en vivo</div>' : '') +
       '</div>' +
       '<div id="nbBottomPager" class="nb-bottom-pager" aria-label="Navegación de hojas">' +
@@ -1506,6 +1679,7 @@
     document.getElementById('nbAddPage').onclick = addPage;
     document.getElementById('nbDeletePage').onclick = deleteCurrentPage;
     document.getElementById('nbUndo').onclick = undo;
+    document.getElementById('nbRedo').onclick = redo;
     document.getElementById('nbClear').onclick = clearPage;
     document.getElementById('nbMode').onclick = function() {
       if (followMode) {
@@ -1566,9 +1740,24 @@
     }
 
     let tool = 'pen';
+    let shapeType = '';
     const pen = document.getElementById('nbPen');
+    const highlighter = document.getElementById('nbHighlighter');
+    const lineBtn = document.getElementById('nbLine');
+    const shapeSelect = document.getElementById('nbShape');
     const eraser = document.getElementById('nbEraser');
+    const brushSelect = document.getElementById('nbBrush');
     const eraserModeSelect = document.getElementById('nbEraserMode');
+    const fingerModeBtn = document.getElementById('nbFingerMode');
+
+    if (brushSelect) {
+      brushSelect.value = ['ballpoint','fountain','pencil'].includes(currentBrush) ? currentBrush : 'ballpoint';
+      brushSelect.onchange = function() {
+        currentBrush = brushSelect.value;
+        localStorage.setItem(BRUSH_KEY, currentBrush);
+        selectTool('pen');
+      };
+    }
     if (eraserModeSelect) {
       eraserModeSelect.value = eraserMode;
       eraserModeSelect.onchange = function() {
@@ -1578,17 +1767,66 @@
         flashStatus(eraserMode === 'stroke' ? '🧽 Borrador por trazos' : '🧽 Borrador libre');
       };
     }
-    function selectTool(next) {
+
+    function updateFingerButton() {
+      if (!fingerModeBtn) return;
+      fingerModeBtn.classList.toggle('active', fingerPanMode);
+      fingerModeBtn.textContent = fingerPanMode ? '☝️ Dedo mueve' : '☝️ Dedo dibuja';
+    }
+    updateFingerButton();
+    if (fingerModeBtn) fingerModeBtn.onclick = function() {
+      fingerPanMode = !fingerPanMode;
+      localStorage.setItem(PENCIL_MODE_KEY, fingerPanMode ? 'pan' : 'draw');
+      updateFingerButton();
+      flashStatus(fingerPanMode ? '☝️ Dedo mueve · Pencil escribe' : '✍️ Dedo también dibuja');
+    };
+
+    function selectTool(next, shape) {
       tool = next;
+      shapeType = shape || '';
       pen.classList.toggle('active', next === 'pen');
+      highlighter && highlighter.classList.toggle('active', next === 'highlighter');
+      lineBtn && lineBtn.classList.toggle('active', next === 'line');
       eraser.classList.toggle('active', next === 'eraser');
+      if (shapeSelect) {
+        shapeSelect.classList.toggle('active', next === 'shape');
+        if (next !== 'shape') shapeSelect.value = '';
+      }
       if (eraserModeSelect) eraserModeSelect.classList.toggle('active', next === 'eraser');
     }
+
     pen.onclick = function() { selectTool('pen'); };
+    if (highlighter) highlighter.onclick = function() { selectTool('highlighter'); };
+    if (lineBtn) lineBtn.onclick = function() { selectTool('line'); };
+    if (shapeSelect) shapeSelect.onchange = function() {
+      if (shapeSelect.value) selectTool('shape', shapeSelect.value);
+    };
     eraser.onclick = function() { selectTool('eraser'); };
 
+    const zoomLabel = document.getElementById('nbZoomLabel');
+    function setZoom(next, anchor) {
+      const pageNow = getPage(nb, currentPageId);
+      if (!pageNow) return;
+      setPageZoom(pageNow, next, anchor);
+      if (zoomLabel) zoomLabel.textContent = Math.round(pageNow.zoom * 100) + '%';
+    }
+    const zoomOut = document.getElementById('nbZoomOut');
+    const zoomIn = document.getElementById('nbZoomIn');
+    if (zoomOut) zoomOut.onclick = function() { const p = getPage(nb,currentPageId); setZoom((p.zoom || 1) / 1.2); };
+    if (zoomIn) zoomIn.onclick = function() { const p = getPage(nb,currentPageId); setZoom((p.zoom || 1) * 1.2); };
+    if (zoomLabel) {
+      const p = getPage(nb,currentPageId);
+      zoomLabel.textContent = Math.round((p.zoom || 1) * 100) + '%';
+      zoomLabel.onclick = function() { setZoom(1); };
+    }
+
     renderPages();
-    setupCanvas(function() { return tool; }, function() { return eraserMode; });
+    setupCanvas(
+      function() { return tool; },
+      function() { return eraserMode; },
+      function() { return shapeType; },
+      function() { return currentBrush; }
+    );
   }
 
   function setCurrentPage(pageId) {
