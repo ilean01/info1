@@ -6,6 +6,7 @@
   const DEVICE_KEY = 'info1-notebook-device-v1';
   const FOLLOW_KEY = 'info1-notebook-follow-v1';
   const OPEN_KEY = 'info1-notebook-open-v1';
+  const ERASER_MODE_KEY = 'info1-notebook-eraser-mode-v1';
   const CHANNEL_VERSION = 'v1';
 
   let currentNotebookId = null;
@@ -31,6 +32,9 @@
   let touchDrag = null;
   let pageSelection = new Set();
   let touchPageDrag = null;
+  let eraserMode = localStorage.getItem(ERASER_MODE_KEY) === 'stroke' ? 'stroke' : 'pixel';
+  let strokeEraseActive = false;
+  let strokeEraseSeen = new Set();
 
   function uuid() {
     return crypto && crypto.randomUUID
@@ -1472,6 +1476,10 @@
       '<div class="nb-toolbar">' +
         '<button id="nbPen" class="active" type="button">✏️ Lápiz</button>' +
         '<button id="nbEraser" type="button">🧽 Borrador</button>' +
+        '<select id="nbEraserMode" aria-label="Modo del borrador">' +
+          '<option value="pixel">Borrar parte</option>' +
+          '<option value="stroke">Borrar trazo completo</option>' +
+        '</select>' +
         '<input id="nbColor" type="color" value="#16264a" aria-label="Color">' +
         '<label class="small">Grosor <input id="nbWidth" type="range" min="1" max="18" value="4"></label>' +
         '<button id="nbUndo" type="button">↶ Deshacer</button>' +
@@ -1560,16 +1568,27 @@
     let tool = 'pen';
     const pen = document.getElementById('nbPen');
     const eraser = document.getElementById('nbEraser');
+    const eraserModeSelect = document.getElementById('nbEraserMode');
+    if (eraserModeSelect) {
+      eraserModeSelect.value = eraserMode;
+      eraserModeSelect.onchange = function() {
+        eraserMode = eraserModeSelect.value === 'stroke' ? 'stroke' : 'pixel';
+        localStorage.setItem(ERASER_MODE_KEY, eraserMode);
+        selectTool('eraser');
+        flashStatus(eraserMode === 'stroke' ? '🧽 Borrador por trazos' : '🧽 Borrador libre');
+      };
+    }
     function selectTool(next) {
       tool = next;
       pen.classList.toggle('active', next === 'pen');
       eraser.classList.toggle('active', next === 'eraser');
+      if (eraserModeSelect) eraserModeSelect.classList.toggle('active', next === 'eraser');
     }
     pen.onclick = function() { selectTool('pen'); };
     eraser.onclick = function() { selectTool('eraser'); };
 
     renderPages();
-    setupCanvas(function() { return tool; });
+    setupCanvas(function() { return tool; }, function() { return eraserMode; });
   }
 
   function setCurrentPage(pageId) {
@@ -1722,7 +1741,74 @@
     renderPageManager();
   }
 
-  function setupCanvas(getTool) {
+  function pointSegmentDistancePx(px, py, ax, ay, bx, by) {
+    const abx = bx - ax;
+    const aby = by - ay;
+    const apx = px - ax;
+    const apy = py - ay;
+    const denom = abx * abx + aby * aby;
+    const t = denom > 0 ? Math.max(0, Math.min(1, (apx * abx + apy * aby) / denom)) : 0;
+    const x = ax + abx * t;
+    const y = ay + aby * t;
+    return Math.hypot(px - x, py - y);
+  }
+
+  function strokeHitAt(stroke, point, cssWidth, cssHeight, radiusPx) {
+    if (!stroke || stroke.tool === 'eraser' || !Array.isArray(stroke.points) || !stroke.points.length) return false;
+    const pts = stroke.points;
+    const px = point.x * cssWidth;
+    const py = point.y * cssHeight;
+    const threshold = Math.max(radiusPx, Number(stroke.width || 4) * 0.5 + 5);
+    if (pts.length === 1) {
+      return Math.hypot(px - pts[0].x * cssWidth, py - pts[0].y * cssHeight) <= threshold;
+    }
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1];
+      const b = pts[i];
+      if (pointSegmentDistancePx(
+        px, py,
+        a.x * cssWidth, a.y * cssHeight,
+        b.x * cssWidth, b.y * cssHeight
+      ) <= threshold) return true;
+    }
+    return false;
+  }
+
+  function eraseWholeStrokesAtEvent(e) {
+    const nb = getNotebook(currentNotebookId);
+    const page = getPage(nb, currentPageId);
+    if (!nb || !page || readOnly || !Array.isArray(page.strokes) || !page.strokes.length || !canvas) return false;
+    const point = pointFromEvent(e);
+    const rect = canvas.getBoundingClientRect();
+    const eraserWidth = Number((document.getElementById('nbWidth') || {}).value || 4);
+    const radius = Math.max(10, eraserWidth * 1.6);
+    const removedIds = [];
+
+    for (let i = page.strokes.length - 1; i >= 0; i--) {
+      const stroke = page.strokes[i];
+      if (!stroke || strokeEraseSeen.has(stroke.id)) continue;
+      if (strokeHitAt(stroke, point, Math.max(1, rect.width), Math.max(1, rect.height), radius)) {
+        removedIds.push(stroke.id);
+        strokeEraseSeen.add(stroke.id);
+        page.strokes.splice(i, 1);
+      }
+    }
+
+    if (!removedIds.length) return false;
+    nb.updatedAt = new Date().toISOString();
+    persist();
+    broadcast('stroke-delete', {
+      notebookId: nb.id,
+      pageId: page.id,
+      strokeIds: removedIds
+    });
+    redraw();
+    refreshPageManagerPreviews();
+    renderNotebookList();
+    return true;
+  }
+
+  function setupCanvas(getTool, getEraserMode) {
     canvas = document.getElementById('info1NotebookCanvas');
     if (!canvas) return;
     ctx = canvas.getContext('2d');
@@ -1742,6 +1828,13 @@
       if (!nb || !page) return;
       canvas.setPointerCapture && canvas.setPointerCapture(e.pointerId);
       const tool = getTool();
+      if (tool === 'eraser' && getEraserMode && getEraserMode() === 'stroke') {
+        strokeEraseActive = true;
+        strokeEraseSeen.clear();
+        eraseWholeStrokesAtEvent(e);
+        e.preventDefault();
+        return;
+      }
       currentDraft = {
         id: uuid(),
         tool,
@@ -1760,7 +1853,13 @@
     };
 
     canvas.onpointermove = function(e) {
-      if (!currentDraft || readOnly) return;
+      if (readOnly) return;
+      if (strokeEraseActive) {
+        eraseWholeStrokesAtEvent(e);
+        e.preventDefault();
+        return;
+      }
+      if (!currentDraft) return;
       const p = pointFromEvent(e);
       const last = currentDraft.points[currentDraft.points.length - 1];
       if (last && Math.hypot(p.x - last.x, p.y - last.y) < 0.0012) return;
@@ -1772,6 +1871,12 @@
     };
 
     const finish = function(e) {
+      if (strokeEraseActive) {
+        strokeEraseActive = false;
+        strokeEraseSeen.clear();
+        if (e) e.preventDefault();
+        return;
+      }
       if (!currentDraft) return;
       flushPoints();
       const nb = getNotebook(currentNotebookId);
@@ -2182,6 +2287,16 @@
         refreshPageManagerPreviews();
         renderNotebookList();
       }
+      return;
+    }
+
+    if (m.kind === 'stroke-delete' && Array.isArray(m.strokeIds)) {
+      const ids = new Set(m.strokeIds);
+      page.strokes = page.strokes.filter(function(s) { return !ids.has(s.id); });
+      nb.updatedAt = new Date().toISOString();
+      redraw();
+      refreshPageManagerPreviews();
+      renderNotebookList();
       return;
     }
 
