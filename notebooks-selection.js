@@ -836,6 +836,18 @@
     selectSingleImage(el.dataset.imageId);
   }
 
+  function deactivateLassoForBaseTool(e) {
+    if (!selectionMode) return;
+    const target = e.target && e.target.closest ? e.target.closest('#nbPen,#nbHighlighter,#nbLine,#nbEraser,#nbBrush,#nbShape') : null;
+    if (!target) return;
+    selectionMode = false;
+    lassoPoints = null;
+    const btn = document.getElementById(TOOL_ID);
+    if (btn) btn.classList.remove('active');
+    renderOverlay();
+    updateTools();
+  }
+
   function handleKeys(e) {
     if (!isEditorVisible()) return;
     const tag=(e.target && e.target.tagName || '').toLowerCase();
@@ -864,8 +876,16 @@
     }
     ensureStyles();
     document.addEventListener('pointerdown',handleImagePointer,true);
+    document.addEventListener('click',deactivateLassoForBaseTool,true);
+    document.addEventListener('change',deactivateLassoForBaseTool,true);
     document.addEventListener('keydown',handleKeys,true);
-    const observer=new MutationObserver(()=>contextWatcher());
+    const observer=new MutationObserver(mutations => {
+      const onlyOwn = mutations.length > 0 && mutations.every(m => {
+        const target = m.target && m.target.nodeType === 1 ? m.target : null;
+        return !!(target && target.closest && target.closest('#nbSelectionExtLayer,#nbSelectionExtTools'));
+      });
+      if (!onlyOwn) contextWatcher();
+    });
     observer.observe(document.body,{childList:true,subtree:true});
     setInterval(contextWatcher,500);
     contextWatcher();
