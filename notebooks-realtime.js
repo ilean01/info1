@@ -55,17 +55,14 @@
     if (!s[STORE_KEY] || typeof s[STORE_KEY] !== 'object') {
       s[STORE_KEY] = {
         version: 1,
-        channelToken: uuid().replace(/-/g, ''),
         notebooks: {},
         order: [],
         updatedAt: new Date().toISOString()
       };
-      persist();
     }
     const store = s[STORE_KEY];
     if (!store.notebooks || typeof store.notebooks !== 'object') store.notebooks = {};
     if (!Array.isArray(store.order)) store.order = Object.keys(store.notebooks);
-    if (!store.channelToken) store.channelToken = uuid().replace(/-/g, '');
     return store;
   }
 
@@ -770,8 +767,7 @@
   function desiredChannelName() {
     const c = cloudContext();
     if (!c.connected || !c.workspaceId) return null;
-    const token = ensureStore().channelToken;
-    return 'info1-notebooks-' + CHANNEL_VERSION + '-' + c.workspaceId + '-' + token;
+    return 'info1-notebooks-' + CHANNEL_VERSION + '-' + c.workspaceId;
   }
 
   function connectRealtime() {
