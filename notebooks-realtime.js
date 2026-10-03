@@ -384,6 +384,14 @@
     const newBtn = document.getElementById('nbNewFree');
     if (newBtn) newBtn.onclick = createStandalone;
 
+    const topBtn = document.getElementById('nbTopButton');
+    if (topBtn) {
+      topBtn.onclick = function() {
+        openNotebookView();
+        showList();
+      };
+    }
+
     renderNotebookList();
     enhanceTopicCards();
     enhanceTopicModal();
@@ -394,11 +402,18 @@
     document.querySelectorAll('.tab').forEach(function(b) {
       b.classList.toggle('active', b.dataset && b.dataset.view === 'notebooksView');
     });
+    const topBtn = document.getElementById('nbTopButton');
+    if (topBtn) topBtn.classList.add('active');
     document.querySelectorAll('.view').forEach(function(v) {
       v.classList.toggle('active', v.id === 'notebooksView');
     });
     document.querySelectorAll('.nav-menu[open]').forEach(function(d) { d.removeAttribute('open'); });
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function clearTopNotebookActive() {
+    const topBtn = document.getElementById('nbTopButton');
+    if (topBtn) topBtn.classList.remove('active');
   }
 
   function showList() {
@@ -1088,6 +1103,13 @@
     };
     setTimeout(function() { tryOpen(0); }, 500);
   }
+
+  document.addEventListener('click', function(e) {
+    const target = e.target && e.target.closest ? e.target.closest('[data-view],[data-partial]') : null;
+    if (!target) return;
+    if (target.id === 'nbNavTab' || (target.dataset && target.dataset.view === 'notebooksView')) return;
+    clearTopNotebookActive();
+  });
 
   function boot() {
     if (!ensureUi()) {
