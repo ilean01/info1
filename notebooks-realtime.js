@@ -56,6 +56,7 @@
   let redrawFrame = 0;
   let lastRenderStats = { drawn: 0, skipped: 0, backingScale: 1 };
   let viewportResizeTimer = null;
+  let viewportCleanup = null;
 
   function uuid() {
     return crypto && crypto.randomUUID
@@ -2300,6 +2301,10 @@
     });
     resizeObserver.observe(scroller);
 
+    if (viewportCleanup) {
+      try { viewportCleanup(); } catch (_) {}
+      viewportCleanup = null;
+    }
     const viewport = window.visualViewport;
     const onViewportResize = function() {
       clearTimeout(viewportResizeTimer);
@@ -2319,6 +2324,13 @@
       viewport.addEventListener('scroll', onViewportResize, { passive:true });
     }
     window.addEventListener('orientationchange', onViewportResize, { passive:true });
+    viewportCleanup = function() {
+      if (viewport) {
+        viewport.removeEventListener('resize', onViewportResize);
+        viewport.removeEventListener('scroll', onViewportResize);
+      }
+      window.removeEventListener('orientationchange', onViewportResize);
+    };
 
     scroller.onscroll = function() {
       const p = getPage(getNotebook(currentNotebookId), currentPageId);
