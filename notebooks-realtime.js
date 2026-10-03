@@ -29,6 +29,8 @@
   let librarySort = 'recent';
   let libraryViewMode = localStorage.getItem('info1-notebook-library-view-v1') === 'list' ? 'list' : 'grid';
   let touchDrag = null;
+  let pageSelection = new Set();
+  let touchPageDrag = null;
 
   function uuid() {
     return crypto && crypto.randomUUID
@@ -484,6 +486,260 @@
     return Number.isFinite(d.getTime()) ? d : new Date(0);
   }
 
+  function clonePage(page, title) {
+    const now = new Date().toISOString();
+    const copy = JSON.parse(JSON.stringify(page || {}));
+    copy.id = uuid();
+    copy.title = title || ((page && page.title) ? page.title + ' · copia' : 'Página');
+    copy.createdAt = now;
+    copy.strokes = (page && page.strokes ? page.strokes : []).map(function(stroke) {
+      const s = JSON.parse(JSON.stringify(stroke));
+      s.id = uuid();
+      return s;
+    });
+    return copy;
+  }
+
+  function blankPage(title) {
+    return {
+      id: uuid(),
+      title: title || 'Página 1',
+      createdAt: new Date().toISOString(),
+      strokes: []
+    };
+  }
+
+  function syncNotebookPages(nb, options) {
+    if (!nb) return;
+    options = options || {};
+    if (!Array.isArray(nb.pages) || !nb.pages.length) nb.pages = [blankPage('Página 1')];
+    nb.updatedAt = new Date().toISOString();
+    if (!nb.pages.some(function(p) { return p.id === currentPageId; }) && currentNotebookId === nb.id) {
+      currentPageId = options.currentPageId && nb.pages.some(function(p) { return p.id === options.currentPageId; })
+        ? options.currentPageId
+        : nb.pages[0].id;
+    }
+    persist();
+    broadcast('pages-replaced', {
+      notebookId: nb.id,
+      pages: nb.pages,
+      currentPageId: currentNotebookId === nb.id ? currentPageId : (options.currentPageId || null)
+    });
+    if (currentNotebookId === nb.id) {
+      renderPages();
+      redraw();
+    }
+    renderNotebookList();
+  }
+
+  function insertPageAfter(pageId) {
+    const nb = getNotebook(currentNotebookId);
+    if (!nb || readOnly) return;
+    if (!Array.isArray(nb.pages)) nb.pages = [];
+    let index = pageId ? nb.pages.findIndex(function(p) { return p.id === pageId; }) : -1;
+    if (index < -1) index = -1;
+    const p = blankPage('Página ' + (nb.pages.length + 1));
+    nb.pages.splice(index + 1, 0, p);
+    currentPageId = p.id;
+    pageSelection.clear();
+    syncNotebookPages(nb, { currentPageId: p.id });
+    sendFocus();
+  }
+
+  function renamePage(pageId) {
+    const nb = getNotebook(currentNotebookId);
+    if (!nb || readOnly) return;
+    const page = getPage(nb, pageId);
+    if (!page) return;
+    const next = prompt('Nombre de la hoja:', page.title || '');
+    if (next === null || !next.trim()) return;
+    page.title = next.trim();
+    syncNotebookPages(nb);
+  }
+
+  function duplicatePage(pageId) {
+    const nb = getNotebook(currentNotebookId);
+    if (!nb || readOnly || !Array.isArray(nb.pages)) return;
+    const index = nb.pages.findIndex(function(p) { return p.id === pageId; });
+    if (index < 0) return;
+    const copy = clonePage(nb.pages[index]);
+    nb.pages.splice(index + 1, 0, copy);
+    currentPageId = copy.id;
+    pageSelection.clear();
+    syncNotebookPages(nb, { currentPageId: copy.id });
+    sendFocus();
+  }
+
+  function reorderPage(sourceId, targetId) {
+    const nb = getNotebook(currentNotebookId);
+    if (!nb || readOnly || sourceId === targetId || !Array.isArray(nb.pages)) return;
+    const from = nb.pages.findIndex(function(p) { return p.id === sourceId; });
+    const to = nb.pages.findIndex(function(p) { return p.id === targetId; });
+    if (from < 0 || to < 0) return;
+    const moved = nb.pages.splice(from, 1)[0];
+    let insertAt = to;
+    if (from < to) insertAt = to - 1;
+    nb.pages.splice(Math.max(0, insertAt), 0, moved);
+    syncNotebookPages(nb);
+  }
+
+  function selectedPageIds() {
+    const nb = getNotebook(currentNotebookId);
+    if (!nb) return [];
+    const ids = Array.from(pageSelection).filter(function(id) {
+      return nb.pages && nb.pages.some(function(p) { return p.id === id; });
+    });
+    return ids.length ? ids : (currentPageId ? [currentPageId] : []);
+  }
+
+  function deleteSelectedPages() {
+    const nb = getNotebook(currentNotebookId);
+    if (!nb || readOnly || !Array.isArray(nb.pages)) return;
+    const ids = selectedPageIds();
+    if (!ids.length) return;
+    if (!confirm('¿Borrar ' + ids.length + ' hoja(s) seleccionada(s)?')) return;
+    const set = new Set(ids);
+    nb.pages = nb.pages.filter(function(p) { return !set.has(p.id); });
+    if (!nb.pages.length) nb.pages = [blankPage('Página 1')];
+    pageSelection.clear();
+    if (!nb.pages.some(function(p) { return p.id === currentPageId; })) currentPageId = nb.pages[0].id;
+    syncNotebookPages(nb);
+    sendFocus();
+  }
+
+  function transferSelectedPages(targetNotebookId, mode) {
+    const source = getNotebook(currentNotebookId);
+    const target = getNotebook(targetNotebookId);
+    if (!source || !target || source.id === target.id || readOnly) return;
+    const ids = selectedPageIds();
+    if (!ids.length) return;
+    const selectedSet = new Set(ids);
+    const ordered = (source.pages || []).filter(function(p) { return selectedSet.has(p.id); });
+    if (!ordered.length) return;
+
+    if (!Array.isArray(target.pages)) target.pages = [];
+    if (mode === 'move') {
+      target.pages.push.apply(target.pages, ordered);
+      source.pages = (source.pages || []).filter(function(p) { return !selectedSet.has(p.id); });
+      if (!source.pages.length) source.pages = [blankPage('Página 1')];
+      if (!source.pages.some(function(p) { return p.id === currentPageId; })) currentPageId = source.pages[0].id;
+    } else {
+      const copies = ordered.map(function(page) { return clonePage(page, page.title); });
+      target.pages.push.apply(target.pages, copies);
+    }
+
+    pageSelection.clear();
+    source.updatedAt = new Date().toISOString();
+    target.updatedAt = new Date().toISOString();
+    persist();
+    broadcast('pages-replaced', { notebookId: source.id, pages: source.pages, currentPageId: currentPageId });
+    broadcast('pages-replaced', { notebookId: target.id, pages: target.pages, currentPageId: null });
+    renderPages();
+    redraw();
+    renderNotebookList();
+    flashStatus(mode === 'move' ? '📄 Hojas movidas' : '📄 Hojas copiadas');
+    sendFocus();
+  }
+
+  function renderPagePreview(canvasEl, page) {
+    if (!canvasEl) return;
+    const width = 260;
+    const height = 170;
+    canvasEl.width = width;
+    canvasEl.height = height;
+    const out = canvasEl.getContext('2d');
+    out.clearRect(0, 0, width, height);
+    out.fillStyle = '#ffffff';
+    out.fillRect(0, 0, width, height);
+    out.save();
+    out.strokeStyle = '#e7edf5';
+    out.lineWidth = 1;
+    for (let x = 0; x <= width; x += 22) {
+      out.beginPath(); out.moveTo(x, 0); out.lineTo(x, height); out.stroke();
+    }
+    for (let y = 0; y <= height; y += 22) {
+      out.beginPath(); out.moveTo(0, y); out.lineTo(width, y); out.stroke();
+    }
+    out.restore();
+    (page && page.strokes ? page.strokes : []).forEach(function(stroke) {
+      drawPreviewStroke(out, stroke, width, height);
+    });
+  }
+
+  function refreshPageManagerPreviews() {
+    const nb = getNotebook(currentNotebookId);
+    if (!nb) return;
+    document.querySelectorAll('[data-page-preview]').forEach(function(canvasEl) {
+      const page = getPage(nb, canvasEl.dataset.pagePreview);
+      if (page) renderPagePreview(canvasEl, page);
+    });
+  }
+
+  function startTouchPageReorder(card, pageId, event) {
+    if (touchPageDrag || readOnly) return;
+    const pointerId = event.pointerId;
+    const sx = event.clientX;
+    const sy = event.clientY;
+    let active = false;
+    let ghost = null;
+    const timer = setTimeout(function() {
+      active = true;
+      touchPageDrag = { pageId: pageId };
+      card.classList.add('dragging');
+      ghost = document.createElement('div');
+      ghost.className = 'nb-drag-ghost';
+      ghost.textContent = '📄 ' + ((getPage(getNotebook(currentNotebookId), pageId) || {}).title || 'Hoja');
+      document.body.appendChild(ghost);
+      ghost.style.left = sx + 'px';
+      ghost.style.top = sy + 'px';
+      if (navigator.vibrate) navigator.vibrate(20);
+    }, 350);
+
+    function targetAt(x, y) {
+      if (ghost) ghost.style.display = 'none';
+      const el = document.elementFromPoint(x, y);
+      if (ghost) ghost.style.display = '';
+      return el && el.closest ? el.closest('[data-page-thumb]') : null;
+    }
+
+    function move(e) {
+      if (e.pointerId !== pointerId) return;
+      if (!active) {
+        if (Math.hypot(e.clientX - sx, e.clientY - sy) > 10) clearTimeout(timer);
+        return;
+      }
+      e.preventDefault();
+      if (ghost) {
+        ghost.style.left = e.clientX + 'px';
+        ghost.style.top = e.clientY + 'px';
+      }
+      document.querySelectorAll('.nb-page-thumb.drop-target').forEach(function(el) { el.classList.remove('drop-target'); });
+      const target = targetAt(e.clientX, e.clientY);
+      if (target && target.dataset.pageThumb !== pageId) target.classList.add('drop-target');
+    }
+
+    function end(e) {
+      if (e.pointerId !== pointerId) return;
+      clearTimeout(timer);
+      window.removeEventListener('pointermove', move, true);
+      window.removeEventListener('pointerup', end, true);
+      window.removeEventListener('pointercancel', end, true);
+      if (active) {
+        e.preventDefault();
+        const target = targetAt(e.clientX, e.clientY);
+        if (target && target.dataset.pageThumb !== pageId) reorderPage(pageId, target.dataset.pageThumb);
+      }
+      document.querySelectorAll('.nb-page-thumb.drop-target').forEach(function(el) { el.classList.remove('drop-target'); });
+      card.classList.remove('dragging');
+      if (ghost) ghost.remove();
+      touchPageDrag = null;
+    }
+
+    window.addEventListener('pointermove', move, { capture: true, passive: false });
+    window.addEventListener('pointerup', end, true);
+    window.addEventListener('pointercancel', end, true);
+  }
+
   function deleteNotebook(id) {
     const store = ensureStore();
     const nb = store.notebooks[id];
@@ -504,20 +760,8 @@
   function addPage() {
     const nb = getNotebook(currentNotebookId);
     if (!nb || readOnly) return;
-    const p = {
-      id: uuid(),
-      title: 'Página ' + ((nb.pages || []).length + 1),
-      createdAt: new Date().toISOString(),
-      strokes: []
-    };
-    if (!Array.isArray(nb.pages)) nb.pages = [];
-    nb.pages.push(p);
-    nb.updatedAt = new Date().toISOString();
-    currentPageId = p.id;
-    persist();
-    broadcast('page-added', { notebookId: nb.id, page: p });
-    renderEditor();
-    sendFocus();
+    const last = Array.isArray(nb.pages) && nb.pages.length ? nb.pages[nb.pages.length - 1] : null;
+    insertPageAfter(last ? last.id : null);
   }
 
   function renameNotebook() {
@@ -556,6 +800,8 @@
     persist();
     broadcast('undo', { notebookId: nb.id, pageId: page.id, strokeId: removed.id });
     redraw();
+    refreshPageManagerPreviews();
+    renderNotebookList();
   }
 
   function clearPage() {
@@ -568,6 +814,8 @@
     persist();
     broadcast('page-cleared', { notebookId: nb.id, pageId: page.id });
     redraw();
+    refreshPageManagerPreviews();
+    renderNotebookList();
   }
 
   function copyLink() {
@@ -626,6 +874,7 @@
       '.nb-toolbar input[type=color]{width:42px;height:36px;padding:3px}.nb-toolbar input[type=range]{width:110px;padding:0}' +
       '.nb-pages{display:flex;gap:7px;overflow:auto;padding-bottom:3px}.nb-page-tab{white-space:nowrap;border:1px solid var(--line);background:#101a31;color:#cbd5e1;border-radius:999px;padding:7px 10px;font-weight:800}' +
       '.nb-page-tab.active{background:#1b3769;color:#fff;border-color:#5e8de6}' +
+      '.nb-page-manager{border:1px solid #334d77;background:#091427;border-radius:15px;padding:10px;display:grid;gap:10px}.nb-page-manager-head{display:flex;gap:7px;align-items:center;flex-wrap:wrap}.nb-page-manager-head strong{margin-right:auto}.nb-page-manager-head select{border:1px solid #38527d;background:#0f1d36;color:#fff;border-radius:9px;padding:8px;max-width:230px}.nb-page-thumbs{display:flex;gap:10px;overflow-x:auto;padding:3px 2px 8px;scroll-snap-type:x proximity}.nb-page-thumb{position:relative;flex:0 0 178px;border:1px solid #334d77;background:#0d1930;border-radius:13px;padding:8px;display:grid;gap:7px;scroll-snap-align:start}.nb-page-thumb.active{border-color:#79a6ff;box-shadow:0 0 0 2px #79a6ff33}.nb-page-thumb.selected{background:#142b50;border-color:#8bb2ff}.nb-page-thumb.dragging{opacity:.45}.nb-page-thumb.drop-target{outline:3px solid #79a6ff;outline-offset:2px}.nb-page-preview{position:relative;aspect-ratio:1.53/1;background:#fff;border:1px solid #cbd5e1;border-radius:8px;overflow:hidden;cursor:pointer}.nb-page-preview canvas{width:100%;height:100%;display:block;pointer-events:none}.nb-page-check{position:absolute;z-index:3;top:12px;left:12px;background:#071126df;border-radius:999px;padding:4px;line-height:1}.nb-page-check input{width:18px;height:18px}.nb-page-thumb-title{font-weight:850;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.nb-page-thumb-actions{display:flex;gap:5px;flex-wrap:wrap}.nb-page-thumb-actions button{padding:5px 7px;font-size:11px}.nb-insert-after{width:100%;border:1px dashed #526c97!important;background:#0a1428!important;color:#bcd0f4!important}.nb-selected-count{font-size:12px;color:#a9bad7;font-weight:800}' +
       '.nb-editor{padding-bottom:96px}' +
       '.nb-bottom-pager{position:fixed;left:50%;bottom:max(18px,env(safe-area-inset-bottom));transform:translateX(-50%);z-index:25000;display:flex;align-items:stretch;background:#f8fafc;color:#111827;border:1px solid #d9dee8;border-radius:20px;box-shadow:0 12px 42px #0005;overflow:hidden;min-height:58px;backdrop-filter:blur(16px)}' +
       '.nb-bottom-pager button{appearance:none;border:0;background:#f8fafc;color:#111827;min-width:58px;padding:0 16px;font-size:28px;line-height:1;font-weight:500;cursor:pointer}' +
@@ -1168,6 +1417,7 @@
   }
 
   function openNotebook(id, pageId, remoteReadOnly, announce) {
+    if (currentNotebookId !== id) pageSelection.clear();
     const nb = getNotebook(id);
     if (!nb) {
       broadcast('snapshot-request', { notebookId: id });
@@ -1206,6 +1456,19 @@
         '</div>' +
       '</div>' +
       '<div id="nbPages" class="nb-pages"></div>' +
+      '<div class="nb-page-manager">' +
+        '<div class="nb-page-manager-head">' +
+          '<strong>▦ Hojas del cuaderno</strong>' +
+          '<span id="nbSelectedCount" class="nb-selected-count">0 seleccionadas</span>' +
+          '<button id="nbSelectAllPages" class="nb-btn" type="button">Seleccionar todas</button>' +
+          '<select id="nbPageTargetNotebook" aria-label="Cuaderno destino"></select>' +
+          '<button id="nbCopyPages" class="nb-btn" type="button">Copiar a…</button>' +
+          '<button id="nbMovePages" class="nb-btn" type="button">Mover a…</button>' +
+          '<button id="nbDeletePages" class="nb-btn danger" type="button">Borrar seleccionadas</button>' +
+          '<button id="nbInsertFirstPage" class="nb-btn" type="button">＋ Hoja al inicio</button>' +
+        '</div>' +
+        '<div id="nbPageThumbs" class="nb-page-thumbs"></div>' +
+      '</div>' +
       '<div class="nb-toolbar">' +
         '<button id="nbPen" class="active" type="button">✏️ Lápiz</button>' +
         '<button id="nbEraser" type="button">🧽 Borrador</button>' +
@@ -1246,6 +1509,53 @@
       updateFollowButton();
       sendFocus();
     };
+
+    const selectAllPages = document.getElementById('nbSelectAllPages');
+    if (selectAllPages) selectAllPages.onclick = function() {
+      if (readOnly) return;
+      const all = (nb.pages || []).map(function(p) { return p.id; });
+      const allSelected = all.length && all.every(function(id) { return pageSelection.has(id); });
+      pageSelection.clear();
+      if (!allSelected) all.forEach(function(id) { pageSelection.add(id); });
+      renderPageManager();
+    };
+    const insertFirst = document.getElementById('nbInsertFirstPage');
+    if (insertFirst) {
+      insertFirst.disabled = readOnly;
+      insertFirst.onclick = function() {
+        if (readOnly) return;
+        const p = blankPage('Página ' + ((nb.pages || []).length + 1));
+        if (!Array.isArray(nb.pages)) nb.pages = [];
+        nb.pages.unshift(p);
+        currentPageId = p.id;
+        pageSelection.clear();
+        syncNotebookPages(nb, { currentPageId: p.id });
+        sendFocus();
+      };
+    }
+    const copyPages = document.getElementById('nbCopyPages');
+    const movePages = document.getElementById('nbMovePages');
+    const deletePages = document.getElementById('nbDeletePages');
+    if (copyPages) {
+      copyPages.disabled = readOnly;
+      copyPages.onclick = function() {
+        const target = document.getElementById('nbPageTargetNotebook');
+        if (!target || !target.value) return flashStatus('Elegí un cuaderno destino');
+        transferSelectedPages(target.value, 'copy');
+      };
+    }
+    if (movePages) {
+      movePages.disabled = readOnly;
+      movePages.onclick = function() {
+        const target = document.getElementById('nbPageTargetNotebook');
+        if (!target || !target.value) return flashStatus('Elegí un cuaderno destino');
+        transferSelectedPages(target.value, 'move');
+      };
+    }
+    if (deletePages) {
+      deletePages.disabled = readOnly;
+      deletePages.onclick = deleteSelectedPages;
+    }
 
     let tool = 'pen';
     const pen = document.getElementById('nbPen');
@@ -1299,6 +1609,103 @@
     next.onclick = function() { movePage(1); };
   }
 
+  function renderPageManager() {
+    const root = document.getElementById('nbPageThumbs');
+    const nb = getNotebook(currentNotebookId);
+    if (!root || !nb) return;
+
+    // Remove stale selections.
+    pageSelection.forEach(function(id) {
+      if (!(nb.pages || []).some(function(p) { return p.id === id; })) pageSelection.delete(id);
+    });
+
+    const target = document.getElementById('nbPageTargetNotebook');
+    if (target) {
+      const store = ensureStore();
+      const opts = ['<option value="">Cuaderno destino…</option>'];
+      store.order.forEach(function(id) {
+        const other = store.notebooks[id];
+        if (!other || other.id === nb.id) return;
+        opts.push('<option value="' + escapeHtml(other.id) + '">' + escapeHtml(other.title) + '</option>');
+      });
+      const previous = target.value;
+      target.innerHTML = opts.join('');
+      if ([...target.options].some(function(o) { return o.value === previous; })) target.value = previous;
+    }
+
+    const count = document.getElementById('nbSelectedCount');
+    if (count) count.textContent = pageSelection.size + ' seleccionada' + (pageSelection.size === 1 ? '' : 's');
+
+    root.innerHTML = (nb.pages || []).map(function(page, index) {
+      return '<article class="nb-page-thumb ' + (page.id === currentPageId ? 'active ' : '') + (pageSelection.has(page.id) ? 'selected' : '') + '" draggable="' + (!readOnly ? 'true' : 'false') + '" data-page-thumb="' + escapeHtml(page.id) + '">' +
+        '<label class="nb-page-check" title="Seleccionar hoja"><input type="checkbox" data-page-select="' + escapeHtml(page.id) + '" ' + (pageSelection.has(page.id) ? 'checked' : '') + (readOnly ? ' disabled' : '') + '></label>' +
+        '<div class="nb-page-preview" data-page-open-thumb="' + escapeHtml(page.id) + '" title="Abrir ' + escapeHtml(page.title) + '">' +
+          '<canvas data-page-preview="' + escapeHtml(page.id) + '"></canvas>' +
+        '</div>' +
+        '<div class="nb-page-thumb-title">' + (index + 1) + '. ' + escapeHtml(page.title || ('Página ' + (index + 1))) + '</div>' +
+        '<div class="nb-page-thumb-actions">' +
+          '<button class="nb-btn" type="button" data-page-rename="' + escapeHtml(page.id) + '" ' + (readOnly ? 'disabled' : '') + '>✏️ Nombre</button>' +
+          '<button class="nb-btn" type="button" data-page-duplicate="' + escapeHtml(page.id) + '" ' + (readOnly ? 'disabled' : '') + '>⧉ Duplicar</button>' +
+          '<button class="nb-btn nb-insert-after" type="button" data-page-insert-after="' + escapeHtml(page.id) + '" ' + (readOnly ? 'disabled' : '') + '>＋ Insertar después</button>' +
+        '</div>' +
+      '</article>';
+    }).join('');
+
+    refreshPageManagerPreviews();
+
+    root.querySelectorAll('[data-page-open-thumb]').forEach(function(el) {
+      el.onclick = function() { setCurrentPage(el.dataset.pageOpenThumb); };
+    });
+    root.querySelectorAll('[data-page-select]').forEach(function(input) {
+      input.onchange = function() {
+        if (input.checked) pageSelection.add(input.dataset.pageSelect);
+        else pageSelection.delete(input.dataset.pageSelect);
+        renderPageManager();
+      };
+    });
+    root.querySelectorAll('[data-page-rename]').forEach(function(btn) {
+      btn.onclick = function() { renamePage(btn.dataset.pageRename); };
+    });
+    root.querySelectorAll('[data-page-duplicate]').forEach(function(btn) {
+      btn.onclick = function() { duplicatePage(btn.dataset.pageDuplicate); };
+    });
+    root.querySelectorAll('[data-page-insert-after]').forEach(function(btn) {
+      btn.onclick = function() { insertPageAfter(btn.dataset.pageInsertAfter); };
+    });
+
+    root.querySelectorAll('[data-page-thumb]').forEach(function(card) {
+      const pageId = card.dataset.pageThumb;
+      card.ondragstart = function(e) {
+        if (readOnly || !e.dataTransfer) return;
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/info1-page', pageId);
+        card.classList.add('dragging');
+      };
+      card.ondragend = function() {
+        card.classList.remove('dragging');
+        root.querySelectorAll('.drop-target').forEach(function(el) { el.classList.remove('drop-target'); });
+      };
+      card.ondragover = function(e) {
+        if (readOnly || !e.dataTransfer) return;
+        e.preventDefault();
+        root.querySelectorAll('.drop-target').forEach(function(el) { el.classList.remove('drop-target'); });
+        card.classList.add('drop-target');
+      };
+      card.ondrop = function(e) {
+        if (readOnly || !e.dataTransfer) return;
+        e.preventDefault();
+        const sourceId = e.dataTransfer.getData('text/info1-page');
+        card.classList.remove('drop-target');
+        if (sourceId) reorderPage(sourceId, pageId);
+      };
+      card.onpointerdown = function(e) {
+        if (readOnly || (e.target && e.target.closest && e.target.closest('button,input,label'))) return;
+        if (e.pointerType === 'mouse') return;
+        startTouchPageReorder(card, pageId, e);
+      };
+    });
+  }
+
   function renderPages() {
     const root = document.getElementById('nbPages');
     const nb = getNotebook(currentNotebookId);
@@ -1312,6 +1719,7 @@
       };
     });
     updateBottomPager();
+    renderPageManager();
   }
 
   function setupCanvas(getTool) {
@@ -1381,6 +1789,8 @@
       }
       currentDraft = null;
       redraw();
+      refreshPageManagerPreviews();
+      renderNotebookList();
       if (e) e.preventDefault();
     };
 
@@ -1709,6 +2119,20 @@
       return;
     }
 
+    if (m.kind === 'pages-replaced' && Array.isArray(m.pages)) {
+      nb.pages = JSON.parse(JSON.stringify(m.pages));
+      if (!nb.pages.length) nb.pages = [blankPage('Página 1')];
+      nb.updatedAt = new Date().toISOString();
+      if (currentNotebookId === nb.id) {
+        if (m.currentPageId && nb.pages.some(function(p) { return p.id === m.currentPageId; }) && readOnly) currentPageId = m.currentPageId;
+        if (!nb.pages.some(function(p) { return p.id === currentPageId; })) currentPageId = nb.pages[0].id;
+        renderPages();
+        redraw();
+      }
+      renderNotebookList();
+      return;
+    }
+
     if (m.kind === 'page-added' && m.page) {
       if (!Array.isArray(nb.pages)) nb.pages = [];
       if (!nb.pages.some(function(p) { return p.id === m.page.id; })) nb.pages.push(m.page);
@@ -1755,6 +2179,8 @@
         remoteDrafts.delete(key);
         nb.updatedAt = new Date().toISOString();
         redraw();
+        refreshPageManagerPreviews();
+        renderNotebookList();
       }
       return;
     }
@@ -1762,12 +2188,16 @@
     if (m.kind === 'undo') {
       page.strokes = page.strokes.filter(function(s) { return s.id !== m.strokeId; });
       redraw();
+      refreshPageManagerPreviews();
+      renderNotebookList();
       return;
     }
 
     if (m.kind === 'page-cleared') {
       page.strokes = [];
       redraw();
+      refreshPageManagerPreviews();
+      renderNotebookList();
     }
   }
 
@@ -1875,6 +2305,8 @@
       createStandalone,
       createForTopic,
       duplicate: duplicateNotebook,
+      duplicatePage: duplicatePage,
+      renamePage: renamePage,
       createFolder: function(parentId) { return createFolder(parentId || null); },
       moveToFolder: setNotebookFolder,
       folders: function() { const store = ensureStore(); return store.folderOrder.map(function(id) { return store.folders[id]; }).filter(Boolean); },
