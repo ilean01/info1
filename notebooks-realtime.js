@@ -188,6 +188,9 @@
     const s = appState();
     if (s[STORE_KEY]) s[STORE_KEY].updatedAt = new Date().toISOString();
     try {
+      if (window.INFO1_NOTEBOOK_RESILIENCE && window.INFO1_NOTEBOOK_RESILIENCE.onPersistStart) {
+        window.INFO1_NOTEBOOK_RESILIENCE.onPersistStart();
+      }
       if (typeof save === 'function') {
         save();
       } else {
@@ -195,6 +198,10 @@
       }
     } catch (e) {
       console.warn('INFO1 cuadernos: no se pudo guardar', e);
+    } finally {
+      if (window.INFO1_NOTEBOOK_RESILIENCE && window.INFO1_NOTEBOOK_RESILIENCE.onPersistEnd) {
+        window.INFO1_NOTEBOOK_RESILIENCE.onPersistEnd();
+      }
     }
   }
 
@@ -2090,6 +2097,9 @@
     nb.updatedAt = new Date().toISOString();
     cleanUnusedMediaAssets();
     persist();
+    if (window.INFO1_NOTEBOOK_RESILIENCE && window.INFO1_NOTEBOOK_RESILIENCE.syncImages) {
+      window.INFO1_NOTEBOOK_RESILIENCE.syncImages(nb.id, page.id, page.images || [], ensureStore().mediaAssets || {});
+    }
     renderImageLayer();
     refreshPageManagerPreviews();
     renderNotebookList();
@@ -2379,6 +2389,9 @@
       image.y = Math.max(0, start.iy + (ev.clientY-start.y)/Math.max(0.001,scale));
       applyImageStyle(el,image,scale);
       maybeGrowPage(getPage(getNotebook(currentNotebookId),currentPageId), image.y+image.h+80);
+      if (window.INFO1_NOTEBOOK_RESILIENCE && window.INFO1_NOTEBOOK_RESILIENCE.syncObjectLive) {
+        window.INFO1_NOTEBOOK_RESILIENCE.syncObjectLive(currentNotebookId, currentPageId, {type:'image', image:JSON.parse(JSON.stringify(image))});
+      }
       ev.preventDefault();
     }
     function end(ev) {
@@ -2410,6 +2423,9 @@
       image.w = w;
       image.h = Math.max(50,w/aspect);
       applyImageStyle(el,image,scale);
+      if (window.INFO1_NOTEBOOK_RESILIENCE && window.INFO1_NOTEBOOK_RESILIENCE.syncObjectLive) {
+        window.INFO1_NOTEBOOK_RESILIENCE.syncObjectLive(currentNotebookId, currentPageId, {type:'image', image:JSON.parse(JSON.stringify(image))});
+      }
       ev.preventDefault();
     }
     function end(ev) {
@@ -2437,6 +2453,9 @@
       const angle = Math.atan2(ev.clientY-cy,ev.clientX-cx)*180/Math.PI;
       image.rotation = base + angle-initialAngle;
       applyImageStyle(el,image,currentCanvasScale());
+      if (window.INFO1_NOTEBOOK_RESILIENCE && window.INFO1_NOTEBOOK_RESILIENCE.syncObjectLive) {
+        window.INFO1_NOTEBOOK_RESILIENCE.syncObjectLive(currentNotebookId, currentPageId, {type:'image', image:JSON.parse(JSON.stringify(image))});
+      }
       ev.preventDefault();
     }
     function end(ev) {
@@ -3453,15 +3472,27 @@
   }
 
   function broadcast(kind, payload) {
-    if (!channel || !channelReady) return;
     const body = Object.assign({
       kind,
       deviceId: deviceId(),
       at: Date.now()
     }, payload || {});
+    if (!channel || !channelReady) {
+      if (window.INFO1_NOTEBOOK_RESILIENCE && window.INFO1_NOTEBOOK_RESILIENCE.enqueueBaseEvent) {
+        window.INFO1_NOTEBOOK_RESILIENCE.enqueueBaseEvent(kind, payload || {});
+      }
+      return;
+    }
     try {
       channel.send({ type: 'broadcast', event: 'nb', payload: body });
-    } catch (_) {}
+      if (window.INFO1_NOTEBOOK_RESILIENCE && window.INFO1_NOTEBOOK_RESILIENCE.onBaseBroadcast) {
+        window.INFO1_NOTEBOOK_RESILIENCE.onBaseBroadcast(kind, payload || {});
+      }
+    } catch (_) {
+      if (window.INFO1_NOTEBOOK_RESILIENCE && window.INFO1_NOTEBOOK_RESILIENCE.enqueueBaseEvent) {
+        window.INFO1_NOTEBOOK_RESILIENCE.enqueueBaseEvent(kind, payload || {});
+      }
+    }
   }
 
   function sendFocus() {
@@ -3863,6 +3894,21 @@
       pasteImage: pasteImageFromClipboard,
       duplicateImage: duplicateImage,
       deleteImage: deleteImage,
+      _bridge: {
+        persist: persist,
+        broadcast: broadcast,
+        deviceId: deviceId,
+        cloudContext: cloudContext,
+        isChannelReady: function() { return channelReady; },
+        currentPage: function() { return getPage(getNotebook(currentNotebookId), currentPageId); },
+        refresh: function() {
+          renderImageLayer();
+          redraw();
+          refreshPageManagerPreviews();
+          renderNotebookList();
+          updateCloudStatus();
+        }
+      },
       setZoom: function(value) {
         const nb = getNotebook(currentNotebookId);
         const page = getPage(nb, currentPageId);
