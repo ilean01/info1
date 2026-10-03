@@ -366,7 +366,12 @@
       btn.addEventListener('click',() => {
         selectionMode=!selectionMode;
         btn.classList.toggle('active',selectionMode);
-        if (!selectionMode) lassoPoints=null;
+        if (!selectionMode) {
+          lassoPoints=null;
+          syncSelectionPresence({cleared:true,lasso:null});
+        } else {
+          syncSelectionPresence({lasso:[]});
+        }
         renderOverlay();
         updateTools();
       });
@@ -758,6 +763,15 @@
     stopEvent(e);
     const snapshot=captureSnapshot();
     if (!snapshot) return;
+    const sessionId='tr-'+uuid();
+    const r=resilience(), nb=currentNotebook(), page=currentPage();
+    if (r && r.syncSelectionTransform && nb && page) {
+      r.syncSelectionTransform(nb.id,page.id,{
+        sessionId:sessionId,phase:'start',type:type,
+        strokeIds:Array.from(selectedStrokes),imageIds:Array.from(selectedImages),
+        bounds:snapshot.bounds
+      });
+    }
     const start={x:e.clientX,y:e.clientY};
     const k=scale();
     const s=stage().getBoundingClientRect();
@@ -780,6 +794,21 @@
         const angle=Math.atan2(ev.clientY-center.y,ev.clientX-center.x)*180/Math.PI-startAngle;
         box.style.transform='rotate('+angle+'deg)';
       }
+      if (r && r.syncSelectionTransform && nb && page) {
+        let transform;
+        if (type==='move') transform={dx:(ev.clientX-start.x)/k,dy:(ev.clientY-start.y)/k};
+        else if (type==='resize') {
+          const dx=(ev.clientX-start.x)/k,dy=(ev.clientY-start.y)/k;
+          transform={factor:clamp(Math.max((snapshot.bounds.width+dx)/snapshot.bounds.width,(snapshot.bounds.height+dy)/snapshot.bounds.height),.2,5)};
+        } else {
+          transform={angle:Math.atan2(ev.clientY-center.y,ev.clientX-center.x)*180/Math.PI-startAngle};
+        }
+        r.syncSelectionTransform(nb.id,page.id,{
+          sessionId:sessionId,phase:'move',type:type,transform:transform,
+          strokeIds:Array.from(selectedStrokes),imageIds:Array.from(selectedImages),
+          bounds:snapshot.bounds
+        });
+      }
     };
 
     const end=ev => {
@@ -799,6 +828,9 @@
         applyTransformSnapshot(snapshot,'rotate',{angle});
       }
       commitCurrent(type==='move'?'Selección movida':type==='resize'?'Selección redimensionada':'Selección rotada');
+      if (r && r.syncSelectionTransform && nb && page) {
+        r.syncSelectionTransform(nb.id,page.id,{sessionId:sessionId,phase:'end',type:type});
+      }
     };
 
     window.addEventListener('pointermove',move,{capture:true,passive:false});
@@ -878,6 +910,7 @@
     if (btn) btn.classList.remove('active');
     renderOverlay();
     updateTools();
+    syncSelectionPresence({cleared:true,lasso:null});
   }
 
   function handleKeys(e) {
