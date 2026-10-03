@@ -22,6 +22,8 @@
   let resizeObserver = null;
   let canvas = null;
   let ctx = null;
+  let currentFolderId = null; // null = todos; "__root__" = sin carpeta
+  let folderSearch = '';
 
   function uuid() {
     return crypto && crypto.randomUUID
@@ -63,6 +65,18 @@
     const store = s[STORE_KEY];
     if (!store.notebooks || typeof store.notebooks !== 'object') store.notebooks = {};
     if (!Array.isArray(store.order)) store.order = Object.keys(store.notebooks);
+    if (!store.folders || typeof store.folders !== 'object') store.folders = {};
+    if (!Array.isArray(store.folderOrder)) store.folderOrder = Object.keys(store.folders);
+    Object.values(store.notebooks).forEach(function(nb) {
+      if (!Object.prototype.hasOwnProperty.call(nb, 'folderId')) nb.folderId = null;
+      if (nb.folderId && !store.folders[nb.folderId]) nb.folderId = null;
+    });
+    Object.values(store.folders).forEach(function(folder) {
+      if (!Object.prototype.hasOwnProperty.call(folder, 'parentId')) folder.parentId = null;
+      if (!folder.icon) folder.icon = '📁';
+      if (!folder.color) folder.color = '#315a9b';
+      if (folder.parentId && !store.folders[folder.parentId]) folder.parentId = null;
+    });
     return store;
   }
 
@@ -123,6 +137,168 @@
       .sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt));
   }
 
+  function folderById(id) {
+    return id ? ensureStore().folders[id] || null : null;
+  }
+
+  function folderChildren(parentId) {
+    const store = ensureStore();
+    return store.folderOrder
+      .map(function(id) { return store.folders[id]; })
+      .filter(function(folder) { return folder && (folder.parentId || null) === (parentId || null); });
+  }
+
+  function folderNotebookCount(folderId) {
+    return Object.values(ensureStore().notebooks).filter(function(nb) { return nb && nb.folderId === folderId; }).length;
+  }
+
+  function folderPath(folderId) {
+    const store = ensureStore();
+    const out = [];
+    const seen = new Set();
+    let id = folderId;
+    while (id && store.folders[id] && !seen.has(id)) {
+      seen.add(id);
+      out.unshift(store.folders[id]);
+      id = store.folders[id].parentId || null;
+    }
+    return out;
+  }
+
+  function normalizeFolderColor(value) {
+    const v = String(value || '').trim();
+    return /^#[0-9a-fA-F]{6}$/.test(v) ? v : '#315a9b';
+  }
+
+  function createFolder(parentId) {
+    const store = ensureStore();
+    const name = prompt(parentId ? 'Nombre de la subcarpeta:' : 'Nombre de la carpeta:', '');
+    if (name === null || !name.trim()) return null;
+    const icon = prompt('Icono de la carpeta (podés usar un emoji):', '📁');
+    if (icon === null) return null;
+    const color = prompt('Color de la carpeta en HEX (ej. #315a9b):', '#315a9b');
+    if (color === null) return null;
+    const createdAt = new Date().toISOString();
+    const folder = {
+      id: uuid(),
+      name: name.trim(),
+      icon: (icon.trim() || '📁').slice(0, 8),
+      color: normalizeFolderColor(color),
+      parentId: parentId || null,
+      createdAt,
+      updatedAt: createdAt
+    };
+    store.folders[folder.id] = folder;
+    const siblings = store.folderOrder.filter(function(id) {
+      const f = store.folders[id];
+      return f && (f.parentId || null) === (folder.parentId || null);
+    });
+    const lastSibling = siblings[siblings.length - 1];
+    if (lastSibling) {
+      const idx = store.folderOrder.indexOf(lastSibling);
+      store.folderOrder.splice(idx + 1, 0, folder.id);
+    } else {
+      store.folderOrder.push(folder.id);
+    }
+    persist();
+    broadcast('folder-created', { folder: folder });
+    renderNotebookList();
+    return folder;
+  }
+
+  function renameFolder(folderId) {
+    const folder = folderById(folderId);
+    if (!folder) return;
+    const next = prompt('Nombre de la carpeta:', folder.name);
+    if (next === null || !next.trim()) return;
+    folder.name = next.trim();
+    folder.updatedAt = new Date().toISOString();
+    persist();
+    broadcast('folder-updated', { folder: folder });
+    renderNotebookList();
+  }
+
+  function editFolderAppearance(folderId) {
+    const folder = folderById(folderId);
+    if (!folder) return;
+    const icon = prompt('Icono/emoji de la carpeta:', folder.icon || '📁');
+    if (icon === null) return;
+    const color = prompt('Color HEX de la carpeta:', folder.color || '#315a9b');
+    if (color === null) return;
+    folder.icon = (icon.trim() || '📁').slice(0, 8);
+    folder.color = normalizeFolderColor(color);
+    folder.updatedAt = new Date().toISOString();
+    persist();
+    broadcast('folder-updated', { folder: folder });
+    renderNotebookList();
+  }
+
+  function deleteFolder(folderId) {
+    const store = ensureStore();
+    const folder = store.folders[folderId];
+    if (!folder) return;
+    const parentId = folder.parentId || null;
+    const notebookCount = folderNotebookCount(folderId);
+    const children = folderChildren(folderId);
+    const detail = notebookCount || children.length
+      ? ' Sus ' + notebookCount + ' cuaderno(s) y ' + children.length + ' subcarpeta(s) se moverán ' + (parentId ? 'a la carpeta superior.' : 'al nivel principal.')
+      : '';
+    if (!confirm('¿Borrar la carpeta “' + folder.name + '”?' + detail)) return;
+    Object.values(store.notebooks).forEach(function(nb) {
+      if (nb && nb.folderId === folderId) nb.folderId = parentId;
+    });
+    children.forEach(function(child) { child.parentId = parentId; });
+    delete store.folders[folderId];
+    store.folderOrder = store.folderOrder.filter(function(id) { return id !== folderId; });
+    if (currentFolderId === folderId) currentFolderId = parentId || null;
+    persist();
+    broadcast('folder-deleted', { folderId: folderId, parentId: parentId });
+    renderNotebookList();
+  }
+
+  function moveFolder(folderId, direction) {
+    const store = ensureStore();
+    const folder = store.folders[folderId];
+    if (!folder) return;
+    const siblings = store.folderOrder.filter(function(id) {
+      const f = store.folders[id];
+      return f && (f.parentId || null) === (folder.parentId || null);
+    });
+    const pos = siblings.indexOf(folderId);
+    const target = pos + direction;
+    if (pos < 0 || target < 0 || target >= siblings.length) return;
+    const otherId = siblings[target];
+    const a = store.folderOrder.indexOf(folderId);
+    const b = store.folderOrder.indexOf(otherId);
+    const tmp = store.folderOrder[a];
+    store.folderOrder[a] = store.folderOrder[b];
+    store.folderOrder[b] = tmp;
+    persist();
+    broadcast('folder-order', { order: store.folderOrder.slice() });
+    renderNotebookList();
+  }
+
+  function setNotebookFolder(notebookId, folderId) {
+    const store = ensureStore();
+    const nb = store.notebooks[notebookId];
+    if (!nb) return;
+    if (folderId && !store.folders[folderId]) folderId = null;
+    nb.folderId = folderId || null;
+    nb.updatedAt = new Date().toISOString();
+    persist();
+    broadcast('notebook-folder', { notebookId: nb.id, folderId: nb.folderId });
+    renderNotebookList();
+    if (currentNotebookId === nb.id) renderEditor();
+  }
+
+  function createNotebookInFolder(folderId) {
+    const folder = folderById(folderId);
+    if (!folder) return;
+    const title = prompt('Nombre del cuaderno para “' + folder.name + '”:', '');
+    if (title === null) return;
+    createNotebook({ title: title.trim() || 'Cuaderno libre', folderId: folder.id });
+  }
+
   function createNotebook(opts) {
     opts = opts || {};
     const store = ensureStore();
@@ -139,6 +315,7 @@
       title,
       topicId: opts.topicId || null,
       topicTitle: opts.topicTitle || base || null,
+      folderId: opts.folderId || null,
       createdAt,
       updatedAt: createdAt,
       pages: [{
@@ -160,7 +337,8 @@
   function createStandalone() {
     const title = prompt('Nombre del cuaderno libre:', '');
     if (title === null) return;
-    createNotebook({ title: title.trim() || 'Cuaderno libre' });
+    const folderId = currentFolderId && currentFolderId !== '__root__' ? currentFolderId : null;
+    createNotebook({ title: title.trim() || 'Cuaderno libre', folderId: folderId });
   }
 
   function createForTopic(topicId, topicTitle) {
@@ -178,7 +356,8 @@
     createNotebook({
       topicId: nb.topicId,
       title: nb.topicTitle || nb.title.split(' · ')[0],
-      topicTitle: nb.topicTitle || nb.title.split(' · ')[0]
+      topicTitle: nb.topicTitle || nb.title.split(' · ')[0],
+      folderId: nb.folderId || null
     });
   }
 
@@ -303,6 +482,10 @@
       '.nb-btn{border:1px solid var(--line);background:#12203c;color:#fff;border-radius:11px;padding:9px 11px;font-weight:800;cursor:pointer}' +
       '.nb-btn:hover{border-color:var(--blue)}.nb-btn.primary{background:#244a91}.nb-btn.danger{background:#401923;border-color:#7c3440}' +
       '.nb-follow.active{background:#153e32;border-color:#3e9d79}' +
+      '.nb-library-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:12px 0}.nb-library-tools input{min-width:220px;flex:1;border:1px solid #38527d;background:#0b152a;color:#fff;border-radius:11px;padding:10px 12px}' +
+      '.nb-breadcrumbs{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:8px 0 12px}.nb-crumb{border:1px solid #334d77;background:#0f1c36;color:#d7e4fb;border-radius:999px;padding:6px 9px;font-weight:800;cursor:pointer}.nb-crumb.active{background:#234a88;border-color:#6d9af0}' +
+      '.nb-folder-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin:10px 0 16px}.nb-folder{border:1px solid #334d77;border-left:7px solid var(--folder-color,#315a9b);background:#0d1730;border-radius:15px;padding:12px;display:grid;gap:8px}.nb-folder-head{display:flex;gap:9px;align-items:center}.nb-folder-icon{font-size:28px}.nb-folder-title{font-weight:900;overflow-wrap:anywhere}.nb-folder-meta{color:var(--muted);font-size:12px}.nb-folder-actions{display:flex;gap:6px;flex-wrap:wrap}.nb-folder-actions button{font-size:12px;padding:6px 8px}' +
+      '.nb-section-title{margin:16px 0 8px;font-size:14px;color:#c7d7f5}.nb-move-select{max-width:190px;border:1px solid #3a527b;background:#101d35;color:#fff;border-radius:9px;padding:7px 8px}' +
       '.nb-grid{display:grid;grid-template-columns:repeat(3,minmax(260px,1fr));gap:12px}' +
       '@media(max-width:1050px){.nb-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:680px){.nb-grid{grid-template-columns:1fr}}' +
       '.nb-card{border:1px solid var(--line);background:#0d1730;border-radius:16px;padding:14px;display:grid;gap:8px}' +
@@ -351,7 +534,16 @@
               '</div>' +
             '</div>' +
             '<div id="nbCloudStatus" class="nb-live">Conectando…</div>' +
-            '<div id="nbList" class="nb-grid" style="margin-top:12px"></div>' +
+            '<div class="nb-library-tools">' +
+              '<button id="nbAllFolders" class="nb-btn" type="button">🗂️ Todos</button>' +
+              '<button id="nbRootNotebooks" class="nb-btn" type="button">🗒️ Sin carpeta</button>' +
+              '<button id="nbNewFolder" class="nb-btn primary" type="button">＋ Carpeta</button>' +
+              '<input id="nbFolderSearch" type="search" placeholder="Buscar cuaderno dentro de esta vista…">' +
+            '</div>' +
+            '<div id="nbBreadcrumbs" class="nb-breadcrumbs"></div>' +
+            '<div id="nbFolders" class="nb-folder-grid"></div>' +
+            '<h3 id="nbNotebookSectionTitle" class="nb-section-title">Cuadernos</h3>' +
+            '<div id="nbList" class="nb-grid"></div>' +
           '</div>' +
           '<div id="nbEditorPanel" class="nb-editor hidden"></div>' +
         '</div>';
@@ -383,6 +575,29 @@
     }
     const newBtn = document.getElementById('nbNewFree');
     if (newBtn) newBtn.onclick = createStandalone;
+    const newFolderBtn = document.getElementById('nbNewFolder');
+    if (newFolderBtn) newFolderBtn.onclick = function() {
+      const parentId = currentFolderId && currentFolderId !== '__root__' ? currentFolderId : null;
+      createFolder(parentId);
+    };
+    const allFoldersBtn = document.getElementById('nbAllFolders');
+    if (allFoldersBtn) allFoldersBtn.onclick = function() {
+      currentFolderId = null;
+      renderNotebookList();
+    };
+    const rootNotebooksBtn = document.getElementById('nbRootNotebooks');
+    if (rootNotebooksBtn) rootNotebooksBtn.onclick = function() {
+      currentFolderId = '__root__';
+      renderNotebookList();
+    };
+    const searchBox = document.getElementById('nbFolderSearch');
+    if (searchBox) {
+      searchBox.value = folderSearch;
+      searchBox.oninput = function() {
+        folderSearch = searchBox.value || '';
+        renderNotebookList();
+      };
+    }
 
     const topBtn = document.getElementById('nbTopButton');
     if (topBtn) {
@@ -434,24 +649,111 @@
 
   function renderNotebookList() {
     const root = document.getElementById('nbList');
+    const foldersRoot = document.getElementById('nbFolders');
+    const crumbsRoot = document.getElementById('nbBreadcrumbs');
+    const titleRoot = document.getElementById('nbNotebookSectionTitle');
     if (!root) return;
     const store = ensureStore();
-    const items = store.order.map(function(id) { return store.notebooks[id]; }).filter(Boolean);
+    const selectedFolder = currentFolderId && currentFolderId !== '__root__' ? folderById(currentFolderId) : null;
+    if (currentFolderId && currentFolderId !== '__root__' && !selectedFolder) currentFolderId = null;
+
+    if (crumbsRoot) {
+      let crumbs = '<button class="nb-crumb ' + (currentFolderId === null ? 'active' : '') + '" data-folder-nav="">🗂️ Todos</button>';
+      if (currentFolderId === '__root__') {
+        crumbs += '<span>›</span><button class="nb-crumb active" data-folder-nav="__root__">🗒️ Sin carpeta</button>';
+      } else if (selectedFolder) {
+        folderPath(selectedFolder.id).forEach(function(folder, index, arr) {
+          crumbs += '<span>›</span><button class="nb-crumb ' + (index === arr.length - 1 ? 'active' : '') + '" data-folder-nav="' + escapeHtml(folder.id) + '">' + escapeHtml(folder.icon || '📁') + ' ' + escapeHtml(folder.name) + '</button>';
+        });
+      }
+      crumbsRoot.innerHTML = crumbs;
+      crumbsRoot.querySelectorAll('[data-folder-nav]').forEach(function(btn) {
+        btn.onclick = function() {
+          currentFolderId = btn.dataset.folderNav || null;
+          renderNotebookList();
+        };
+      });
+    }
+
+    const folderParent = selectedFolder ? selectedFolder.id : null;
+    const visibleFolders = currentFolderId === '__root__' ? [] : folderChildren(folderParent);
+    if (foldersRoot) {
+      foldersRoot.innerHTML = visibleFolders.map(function(folder) {
+        const count = folderNotebookCount(folder.id);
+        const subcount = folderChildren(folder.id).length;
+        return '<article class="nb-folder" style="--folder-color:' + escapeHtml(folder.color || '#315a9b') + '">' +
+          '<div class="nb-folder-head">' +
+            '<span class="nb-folder-icon">' + escapeHtml(folder.icon || '📁') + '</span>' +
+            '<div><div class="nb-folder-title">' + escapeHtml(folder.name) + '</div><div class="nb-folder-meta">' + count + ' cuaderno(s)' + (subcount ? ' · ' + subcount + ' subcarpeta(s)' : '') + '</div></div>' +
+          '</div>' +
+          '<div class="nb-folder-actions">' +
+            '<button class="nb-btn primary" data-folder-open="' + escapeHtml(folder.id) + '">Abrir</button>' +
+            '<button class="nb-btn" data-folder-newnb="' + escapeHtml(folder.id) + '">＋ Cuaderno</button>' +
+            '<button class="nb-btn" data-folder-sub="' + escapeHtml(folder.id) + '">＋ Subcarpeta</button>' +
+            '<button class="nb-btn" data-folder-rename="' + escapeHtml(folder.id) + '">✏️</button>' +
+            '<button class="nb-btn" data-folder-style="' + escapeHtml(folder.id) + '">🎨</button>' +
+            '<button class="nb-btn" data-folder-up="' + escapeHtml(folder.id) + '">↑</button>' +
+            '<button class="nb-btn" data-folder-down="' + escapeHtml(folder.id) + '">↓</button>' +
+            '<button class="nb-btn danger" data-folder-delete="' + escapeHtml(folder.id) + '">🗑</button>' +
+          '</div>' +
+        '</article>';
+      }).join('');
+      foldersRoot.querySelectorAll('[data-folder-open]').forEach(function(btn) { btn.onclick = function() { currentFolderId = btn.dataset.folderOpen; renderNotebookList(); }; });
+      foldersRoot.querySelectorAll('[data-folder-newnb]').forEach(function(btn) { btn.onclick = function() { createNotebookInFolder(btn.dataset.folderNewnb); }; });
+      foldersRoot.querySelectorAll('[data-folder-sub]').forEach(function(btn) { btn.onclick = function() { createFolder(btn.dataset.folderSub); }; });
+      foldersRoot.querySelectorAll('[data-folder-rename]').forEach(function(btn) { btn.onclick = function() { renameFolder(btn.dataset.folderRename); }; });
+      foldersRoot.querySelectorAll('[data-folder-style]').forEach(function(btn) { btn.onclick = function() { editFolderAppearance(btn.dataset.folderStyle); }; });
+      foldersRoot.querySelectorAll('[data-folder-up]').forEach(function(btn) { btn.onclick = function() { moveFolder(btn.dataset.folderUp, -1); }; });
+      foldersRoot.querySelectorAll('[data-folder-down]').forEach(function(btn) { btn.onclick = function() { moveFolder(btn.dataset.folderDown, 1); }; });
+      foldersRoot.querySelectorAll('[data-folder-delete]').forEach(function(btn) { btn.onclick = function() { deleteFolder(btn.dataset.folderDelete); }; });
+    }
+
+    const query = folderSearch.trim().toLocaleLowerCase('es');
+    let items = store.order.map(function(id) { return store.notebooks[id]; }).filter(Boolean);
+    if (currentFolderId === '__root__') {
+      items = items.filter(function(nb) { return !nb.folderId; });
+    } else if (selectedFolder) {
+      items = items.filter(function(nb) { return nb.folderId === selectedFolder.id; });
+    }
+    if (query) {
+      items = items.filter(function(nb) {
+        return String(nb.title || '').toLocaleLowerCase('es').includes(query) ||
+          String(nb.topicTitle || '').toLocaleLowerCase('es').includes(query);
+      });
+    }
+
+    if (titleRoot) {
+      titleRoot.textContent = selectedFolder
+        ? (selectedFolder.icon || '📁') + ' ' + selectedFolder.name + ' · Cuadernos'
+        : (currentFolderId === '__root__' ? '🗒️ Cuadernos sin carpeta' : '📓 Todos los cuadernos');
+    }
+
     if (!items.length) {
-      root.innerHTML = '<div class="empty">Todavía no hay cuadernos. Creá uno libre o abrí una ficha y tocá “📓 Cuaderno”.</div>';
+      root.innerHTML = '<div class="empty">' + (query ? 'No encontré cuadernos con esa búsqueda.' : (selectedFolder ? 'Esta carpeta todavía no tiene cuadernos. Usá “＋ Cuaderno”.' : 'Todavía no hay cuadernos en esta vista.')) + '</div>';
       return;
     }
+
+    const folderOptions = ['<option value="">Sin carpeta</option>'].concat(
+      store.folderOrder.map(function(id) {
+        const folder = store.folders[id];
+        if (!folder) return '';
+        const depth = Math.max(0, folderPath(folder.id).length - 1);
+        return '<option value="' + escapeHtml(folder.id) + '">' + escapeHtml('—'.repeat(depth) + (depth ? ' ' : '') + (folder.icon || '📁') + ' ' + folder.name) + '</option>';
+      }).filter(Boolean)
+    ).join('');
 
     root.innerHTML = items.map(function(nb) {
       const pageCount = Array.isArray(nb.pages) ? nb.pages.length : 0;
       const strokeCount = (nb.pages || []).reduce(function(n, p) { return n + ((p.strokes || []).length); }, 0);
+      const folder = nb.folderId ? store.folders[nb.folderId] : null;
       return '<article class="nb-card">' +
         '<h3>' + escapeHtml(nb.title) + '</h3>' +
         '<div class="meta">' + (nb.topicId ? '📚 ' + escapeHtml(nb.topicTitle || 'Vinculado a una ficha') + ' · ' : '🗒️ Libre · ') + pageCount + ' pág. · ' + strokeCount + ' trazos</div>' +
-        '<div class="meta">Actualizado ' + escapeHtml(dateLabel(nb.updatedAt || nb.createdAt)) + '</div>' +
+        '<div class="meta">' + (folder ? escapeHtml((folder.icon || '📁') + ' ' + folder.name) + ' · ' : 'Sin carpeta · ') + 'Actualizado ' + escapeHtml(dateLabel(nb.updatedAt || nb.createdAt)) + '</div>' +
         '<div class="row">' +
           '<button class="nb-btn primary" data-nb-open="' + escapeHtml(nb.id) + '">Abrir</button>' +
           '<button class="nb-btn" data-nb-link="' + escapeHtml(nb.id) + '">🔗 Link</button>' +
+          '<select class="nb-move-select" data-nb-folder="' + escapeHtml(nb.id) + '" aria-label="Mover cuaderno de carpeta">' + folderOptions + '</select>' +
           '<button class="nb-btn danger" data-nb-delete="' + escapeHtml(nb.id) + '">Borrar</button>' +
         '</div>' +
       '</article>';
@@ -470,6 +772,11 @@
         currentPageId = nb.pages && nb.pages[0] ? nb.pages[0].id : null;
         copyLink();
       };
+    });
+    root.querySelectorAll('[data-nb-folder]').forEach(function(select) {
+      const nb = getNotebook(select.dataset.nbFolder);
+      select.value = nb && nb.folderId ? nb.folderId : '';
+      select.onchange = function() { setNotebookFolder(select.dataset.nbFolder, select.value || null); };
     });
     root.querySelectorAll('[data-nb-delete]').forEach(function(btn) {
       btn.onclick = function() { deleteNotebook(btn.dataset.nbDelete); };
@@ -507,7 +814,7 @@
     root.innerHTML =
       '<div class="nb-editor-top">' +
         '<button id="nbBack" class="nb-btn" type="button">← Todos los cuadernos</button>' +
-        '<div class="nb-title-wrap"><h2>' + escapeHtml(nb.title) + '</h2><div class="nb-live ' + (channelReady ? 'ok' : 'warn') + '">' + (channelReady ? '● Tiempo real conectado' : '● Modo local / conectando') + (readOnly ? ' · Solo lectura' : ' · Editando') + '</div></div>' +
+        '<div class="nb-title-wrap"><h2>' + escapeHtml(nb.title) + '</h2><div class="nb-live ' + (channelReady ? 'ok' : 'warn') + '">' + (channelReady ? '● Tiempo real conectado' : '● Modo local / conectando') + (readOnly ? ' · Solo lectura' : ' · Editando') + '</div><div class="nb-live">' + (nb.folderId && folderById(nb.folderId) ? escapeHtml((folderById(nb.folderId).icon || '📁') + ' ' + folderById(nb.folderId).name) : '🗒️ Sin carpeta') + '</div></div>' +
         '<div class="nb-actions">' +
           '<button id="nbRename" class="nb-btn" type="button">✏️ Nombre</button>' +
           (nb.topicId ? '<button id="nbAnother" class="nb-btn" type="button">＋ Otro de esta ficha</button>' : '') +
@@ -947,6 +1254,53 @@
       return;
     }
 
+    if (m.kind === 'folder-created' && m.folder && m.folder.id) {
+      store.folders[m.folder.id] = m.folder;
+      if (!store.folderOrder.includes(m.folder.id)) store.folderOrder.push(m.folder.id);
+      renderNotebookList();
+      return;
+    }
+
+    if (m.kind === 'folder-updated' && m.folder && m.folder.id) {
+      store.folders[m.folder.id] = m.folder;
+      if (!store.folderOrder.includes(m.folder.id)) store.folderOrder.push(m.folder.id);
+      renderNotebookList();
+      return;
+    }
+
+    if (m.kind === 'folder-deleted') {
+      const parentId = m.parentId || null;
+      Object.values(store.notebooks).forEach(function(item) {
+        if (item && item.folderId === m.folderId) item.folderId = parentId;
+      });
+      Object.values(store.folders).forEach(function(folder) {
+        if (folder && folder.parentId === m.folderId) folder.parentId = parentId;
+      });
+      delete store.folders[m.folderId];
+      store.folderOrder = store.folderOrder.filter(function(id) { return id !== m.folderId; });
+      if (currentFolderId === m.folderId) currentFolderId = parentId || null;
+      renderNotebookList();
+      return;
+    }
+
+    if (m.kind === 'folder-order' && Array.isArray(m.order)) {
+      store.folderOrder = m.order.filter(function(id) { return !!store.folders[id]; });
+      Object.keys(store.folders).forEach(function(id) { if (!store.folderOrder.includes(id)) store.folderOrder.push(id); });
+      renderNotebookList();
+      return;
+    }
+
+    if (m.kind === 'notebook-folder') {
+      const moved = store.notebooks[m.notebookId];
+      if (moved) {
+        moved.folderId = m.folderId && store.folders[m.folderId] ? m.folderId : null;
+        moved.updatedAt = new Date().toISOString();
+        renderNotebookList();
+        if (currentNotebookId === moved.id) renderEditor();
+      }
+      return;
+    }
+
     const nb = store.notebooks[m.notebookId];
     if (!nb) {
       if (m.notebookId) broadcast('snapshot-request', { notebookId: m.notebookId });
@@ -1126,6 +1480,9 @@
     window.INFO1_NOTEBOOKS = {
       createStandalone,
       createForTopic,
+      createFolder: function(parentId) { return createFolder(parentId || null); },
+      moveToFolder: setNotebookFolder,
+      folders: function() { const store = ensureStore(); return store.folderOrder.map(function(id) { return store.folders[id]; }).filter(Boolean); },
       open: openNotebook,
       list: function() { return ensureStore().order.map(function(id) { return ensureStore().notebooks[id]; }).filter(Boolean); },
       get current() { return currentNotebookId; },
