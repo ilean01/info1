@@ -438,7 +438,13 @@
     ensureStyles();connect();ensureUi();refreshPresence(true);
     window.addEventListener('online',()=>{connect();setTimeout(()=>refreshPresence(true),100);});
     window.addEventListener('offline',()=>{ready=false;renderPeople();});
-    observer=new MutationObserver(()=>ensureUi());
+    observer=new MutationObserver(mutations=>{
+      const onlyOwn=mutations.length&&mutations.every(m=>{
+        const target=m.target&&m.target.nodeType===1?m.target:null;
+        return !!(target&&target.closest&&target.closest('#nbCollabBar,#nbCursorLayer,#nbAuthorLayer'));
+      });
+      if(!onlyOwn) ensureUi();
+    });
     observer.observe(document.body,{childList:true,subtree:true});
     cleanupTimer=setInterval(contextTick,800);
 
