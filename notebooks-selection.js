@@ -20,6 +20,21 @@
     return window.INFO1_NOTEBOOKS || null;
   }
 
+  function resilience() {
+    return window.INFO1_NOTEBOOK_RESILIENCE || null;
+  }
+
+  function syncSelectionPresence(extra) {
+    const r=resilience(), nb=currentNotebook(), page=currentPage();
+    if (!r || !r.syncSelection || !nb || !page) return;
+    r.syncSelection(nb.id,page.id,Object.assign({
+      active:selectionMode,
+      strokeIds:Array.from(selectedStrokes),
+      imageIds:Array.from(selectedImages),
+      bounds:selectionBounds()
+    },extra||{}));
+  }
+
   function readOpen() {
     try { return JSON.parse(localStorage.getItem(OPEN_KEY) || '{}') || {}; }
     catch (_) { return {}; }
@@ -110,6 +125,7 @@
       renderOverlay();
       highlightImages();
       updateTools();
+      syncSelectionPresence({cleared:true,lasso:null});
     }
   }
 
@@ -232,6 +248,7 @@
     renderOverlay();
     highlightImages();
     updateTools();
+    syncSelectionPresence({lasso:null});
   }
 
   function selectSingleImage(imageId) {
@@ -244,6 +261,7 @@
     renderOverlay();
     highlightImages();
     updateTools();
+    syncSelectionPresence({lasso:null});
   }
 
   function ensureStyles() {
@@ -437,6 +455,7 @@
       stopEvent(e);
       lassoPoints=[logicalPoint(e.clientX,e.clientY)];
       renderOverlay();
+      syncSelectionPresence({lasso:lassoPoints.slice()});
       const pointerId=e.pointerId;
 
       const move=ev => {
@@ -444,7 +463,10 @@
         stopEvent(ev);
         const p=logicalPoint(ev.clientX,ev.clientY);
         const last=lassoPoints[lassoPoints.length-1];
-        if (!last || Math.hypot(p.x-last.x,p.y-last.y)>2) lassoPoints.push(p);
+        if (!last || Math.hypot(p.x-last.x,p.y-last.y)>2) {
+          lassoPoints.push(p);
+          syncSelectionPresence({lasso:lassoPoints.slice()});
+        }
         renderOverlay();
       };
       const end=ev => {
@@ -464,11 +486,21 @@
   }
 
   function saveChanges(notebooks, message) {
-    (notebooks||[]).filter(Boolean).forEach(nb => nb.updatedAt=new Date().toISOString());
+    const list=(notebooks||[]).filter(Boolean);
+    list.forEach(nb => nb.updatedAt=new Date().toISOString());
     try {
-      if (typeof window.save==='function') window.save();
+      const a=api();
+      if (a && a._bridge && a._bridge.persist) a._bridge.persist();
+      else if (typeof window.save==='function') window.save();
       else if (typeof save==='function') save();
+      if (a && a._bridge && a._bridge.broadcast) {
+        list.forEach(nb => a._bridge.broadcast('pages-replaced',{
+          notebookId:nb.id,pages:nb.pages||[],
+          currentPageId:nb.id===a.current?(readOpen().pageId||null):null
+        }));
+      }
     } catch (e) { console.warn('INFO1 selección: no se pudo guardar',e); }
+    syncSelectionPresence({lasso:null});
     if (message) toast(message);
   }
 
