@@ -1836,6 +1836,8 @@
     if (!next) return;
     currentPageId = next.id;
     localStorage.setItem(OPEN_KEY, JSON.stringify({ notebookId: nb.id, pageId: currentPageId }));
+    applyCanvasGeometry(next);
+    restorePageViewport(next);
     renderPages();
     redraw();
     sendFocus();
@@ -1991,23 +1993,52 @@
     return Math.hypot(px - x, py - y);
   }
 
-  function strokeHitAt(stroke, point, cssWidth, cssHeight, radiusPx) {
+  function currentCanvasScale() {
+    if (!canvas) return 1;
+    const rect = canvas.getBoundingClientRect();
+    return Math.max(0.001, rect.width / LOGICAL_WIDTH);
+  }
+
+  function strokeHitAt(stroke, point, page, cssWidth, scale, radiusPx) {
     if (!stroke || stroke.tool === 'eraser' || !Array.isArray(stroke.points) || !stroke.points.length) return false;
     const pts = stroke.points;
     const px = point.x * cssWidth;
-    const py = point.y * cssHeight;
-    const threshold = Math.max(radiusPx, Number(stroke.width || 4) * 0.5 + 5);
+    const py = point.y * scale;
+    const threshold = Math.max(radiusPx, Number(stroke.width || 4) * scale * 0.5 + 5);
     if (pts.length === 1) {
-      return Math.hypot(px - pts[0].x * cssWidth, py - pts[0].y * cssHeight) <= threshold;
+      return Math.hypot(px - pts[0].x * cssWidth, py - pts[0].y * scale) <= threshold;
     }
     for (let i = 1; i < pts.length; i++) {
       const a = pts[i - 1];
       const b = pts[i];
       if (pointSegmentDistancePx(
         px, py,
-        a.x * cssWidth, a.y * cssHeight,
-        b.x * cssWidth, b.y * cssHeight
+        a.x * cssWidth, a.y * scale,
+        b.x * cssWidth, b.y * scale
       ) <= threshold) return true;
+    }
+    if (stroke.shapeData) {
+      const d = stroke.shapeData;
+      const synthetic = [];
+      if (stroke.shapeType === 'line') {
+        synthetic.push({x:d.x1,y:d.y1},{x:d.x2,y:d.y2});
+      } else if (stroke.shapeType === 'circle') {
+        const cx = (d.x1 + d.x2) / 2;
+        const cy = (d.y1 + d.y2) / 2;
+        const rx = Math.abs(d.x2 - d.x1) / 2;
+        const ry = Math.abs(d.y2 - d.y1) / 2;
+        for (let i = 0; i <= 36; i++) {
+          const a = (Math.PI * 2 * i) / 36;
+          synthetic.push({x:cx + Math.cos(a)*rx,y:cy + Math.sin(a)*ry});
+        }
+      }
+      for (let i = 1; i < synthetic.length; i++) {
+        if (pointSegmentDistancePx(
+          px, py,
+          synthetic[i-1].x * cssWidth, synthetic[i-1].y * scale,
+          synthetic[i].x * cssWidth, synthetic[i].y * scale
+        ) <= threshold) return true;
+      }
     }
     return false;
   }
@@ -2018,14 +2049,15 @@
     if (!nb || !page || readOnly || !Array.isArray(page.strokes) || !page.strokes.length || !canvas) return false;
     const point = pointFromEvent(e);
     const rect = canvas.getBoundingClientRect();
+    const scale = Math.max(0.001, rect.width / LOGICAL_WIDTH);
     const eraserWidth = Number((document.getElementById('nbWidth') || {}).value || 4);
-    const radius = Math.max(10, eraserWidth * 1.6);
+    const radius = Math.max(10, eraserWidth * scale * 1.8);
     const removedIds = [];
 
     for (let i = page.strokes.length - 1; i >= 0; i--) {
       const stroke = page.strokes[i];
       if (!stroke || strokeEraseSeen.has(stroke.id)) continue;
-      if (strokeHitAt(stroke, point, Math.max(1, rect.width), Math.max(1, rect.height), radius)) {
+      if (strokeHitAt(stroke, point, page, Math.max(1, rect.width), scale, radius)) {
         removedIds.push(stroke.id);
         strokeEraseSeen.add(stroke.id);
         page.strokes.splice(i, 1);
@@ -2033,6 +2065,7 @@
     }
 
     if (!removedIds.length) return false;
+    page.redoStack = [];
     nb.updatedAt = new Date().toISOString();
     persist();
     broadcast('stroke-delete', {
@@ -2046,25 +2079,277 @@
     return true;
   }
 
-  function setupCanvas(getTool, getEraserMode) {
-    canvas = document.getElementById('info1NotebookCanvas');
+  function canvasCssSize(page) {
+    const scroller = document.getElementById('nbCanvasScroller');
+    const zoom = clamp(Number(page && page.zoom) || 1, 0.45, 3.5);
+    const fitWidth = Math.max(300, (scroller ? scroller.clientWidth : 900) - 24);
+    const width = Math.max(260, fitWidth * zoom);
+    const height = Math.max(400, (Number(page && page.height) || INITIAL_PAGE_HEIGHT) * width / LOGICAL_WIDTH);
+    return { width, height };
+  }
+
+  function resizeCanvas() {
     if (!canvas) return;
-    ctx = canvas.getContext('2d');
+    const r = canvas.getBoundingClientRect();
+    const cssW = Math.max(1, r.width);
+    const cssH = Math.max(1, r.height);
+    const device = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+    const pixelCap = Math.sqrt(MAX_CANVAS_PIXELS / Math.max(1, cssW * cssH));
+    const dimensionCap = Math.min(MAX_CANVAS_DIMENSION / cssW, MAX_CANVAS_DIMENSION / cssH);
+    const backingScale = Math.max(0.12, Math.min(device, pixelCap, dimensionCap));
+    const w = Math.max(1, Math.round(cssW * backingScale));
+    const h = Math.max(1, Math.round(cssH * backingScale));
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+  }
+
+  function applyCanvasGeometry(page) {
+    page = normalizePage(page);
+    const stage = document.getElementById('nbCanvasStage');
+    if (!page || !stage || !canvas) return;
+    const size = canvasCssSize(page);
+    stage.style.width = Math.round(size.width) + 'px';
+    stage.style.height = Math.round(size.height) + 'px';
+    canvas.style.width = '100%';
+    canvas.style.height = '100%';
     resizeCanvas();
+    const label = document.getElementById('nbZoomLabel');
+    if (label) label.textContent = Math.round(page.zoom * 100) + '%';
+  }
+
+  function restorePageViewport(page) {
+    const scroller = document.getElementById('nbCanvasScroller');
+    if (!scroller || !page) return;
+    requestAnimationFrame(function() {
+      const scale = currentCanvasScale();
+      scroller.scrollTop = Math.max(0, Number(page.scrollY || 0) * scale);
+      scroller.scrollLeft = Math.max(0, Number(page.scrollX || 0) * scale);
+    });
+  }
+
+  function persistViewportSoon(page) {
+    clearTimeout(scrollPersistTimer);
+    scrollPersistTimer = setTimeout(function() {
+      if (!page) return;
+      persist();
+      sendFocus();
+    }, 260);
+  }
+
+  function growPage(page, amount) {
+    if (!page) return;
+    page.height = Math.max(INITIAL_PAGE_HEIGHT, Number(page.height) || INITIAL_PAGE_HEIGHT) + (amount || PAGE_GROW_BY);
+    applyCanvasGeometry(page);
+    redraw();
+    persistViewportSoon(page);
+    broadcast('page-layout', {
+      notebookId: currentNotebookId,
+      pageId: page.id,
+      height: page.height,
+      zoom: page.zoom
+    });
+  }
+
+  function maybeGrowPage(page, logicalY) {
+    if (!page) return;
+    if (page.height - logicalY < 260) growPage(page, PAGE_GROW_BY);
+  }
+
+  function setPageZoom(page, nextZoom, anchor) {
+    const scroller = document.getElementById('nbCanvasScroller');
+    if (!page || !scroller || !canvas) return;
+    const oldScale = currentCanvasScale();
+    const ax = anchor && Number.isFinite(anchor.x) ? anchor.x : scroller.clientWidth / 2;
+    const ay = anchor && Number.isFinite(anchor.y) ? anchor.y : scroller.clientHeight / 2;
+    const logicalX = (scroller.scrollLeft + ax) / Math.max(0.001, oldScale);
+    const logicalY = (scroller.scrollTop + ay) / Math.max(0.001, oldScale);
+    page.zoom = clamp(Number(nextZoom) || 1, 0.45, 3.5);
+    applyCanvasGeometry(page);
+    redraw();
+    requestAnimationFrame(function() {
+      const newScale = currentCanvasScale();
+      scroller.scrollLeft = Math.max(0, logicalX * newScale - ax);
+      scroller.scrollTop = Math.max(0, logicalY * newScale - ay);
+      page.scrollX = scroller.scrollLeft / Math.max(0.001, newScale);
+      page.scrollY = scroller.scrollTop / Math.max(0.001, newScale);
+      persistViewportSoon(page);
+    });
+  }
+
+  function classifyHeldShape(stroke) {
+    if (!stroke || !Array.isArray(stroke.points) || stroke.points.length < 2) return null;
+    const pts = stroke.points;
+    const xy = pts.map(function(p) { return { x: p.x * LOGICAL_WIDTH, y: p.y }; });
+    let path = 0;
+    for (let i = 1; i < xy.length; i++) path += Math.hypot(xy[i].x - xy[i-1].x, xy[i].y - xy[i-1].y);
+    const first = xy[0];
+    const last = xy[xy.length - 1];
+    const direct = Math.hypot(last.x - first.x, last.y - first.y);
+    if (path > 24 && direct / Math.max(1, path) > 0.94) {
+      return {
+        type: 'line',
+        data: { x1: pts[0].x, y1: pts[0].y, x2: pts[pts.length-1].x, y2: pts[pts.length-1].y }
+      };
+    }
+
+    if (pts.length < 8) return null;
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    xy.forEach(function(p) {
+      minX = Math.min(minX,p.x); maxX = Math.max(maxX,p.x);
+      minY = Math.min(minY,p.y); maxY = Math.max(maxY,p.y);
+    });
+    const w = maxX - minX;
+    const h = maxY - minY;
+    const closed = Math.hypot(last.x-first.x,last.y-first.y) <= Math.max(28, Math.max(w,h)*0.28);
+    if (closed && w > 28 && h > 28) {
+      const cx = (minX + maxX) / 2;
+      const cy = (minY + maxY) / 2;
+      const radii = xy.map(function(p){ return Math.hypot(p.x-cx,p.y-cy); });
+      const mean = radii.reduce(function(a,b){return a+b;},0) / radii.length;
+      const variance = radii.reduce(function(a,b){ const d=b-mean; return a+d*d;},0) / radii.length;
+      const radialCv = Math.sqrt(variance) / Math.max(1,mean);
+      const ratio = w / Math.max(1,h);
+      if (ratio > 0.58 && ratio < 1.72 && radialCv < 0.27) {
+        return {
+          type: 'circle',
+          data: {
+            x1: minX / LOGICAL_WIDTH,
+            y1: minY,
+            x2: maxX / LOGICAL_WIDTH,
+            y2: maxY
+          }
+        };
+      }
+    }
+    return null;
+  }
+
+  function scheduleShapeHoldSnap() {
+    clearTimeout(shapeHoldTimer);
+    if (!currentDraft || !['pen','highlighter'].includes(currentDraft.tool) || currentDraft.points.length < 2) return;
+    shapeHoldTimer = setTimeout(function() {
+      if (!currentDraft) return;
+      const recognized = classifyHeldShape(currentDraft);
+      if (!recognized) return;
+      currentDraft.shapeType = recognized.type;
+      currentDraft.shapeData = recognized.data;
+      currentDraft.snappedByHold = true;
+      redraw();
+      if (navigator.vibrate) navigator.vibrate(18);
+      flashStatus(recognized.type === 'line' ? '📏 Línea enderezada' : '◯ Círculo reconocido');
+    }, 620);
+  }
+
+  function setupCanvas(getTool, getEraserMode, getShapeType, getBrush) {
+    canvas = document.getElementById('info1NotebookCanvas');
+    const scroller = document.getElementById('nbCanvasScroller');
+    if (!canvas || !scroller) return;
+    ctx = canvas.getContext('2d');
+    const nb = getNotebook(currentNotebookId);
+    const page = getPage(nb, currentPageId);
+    if (!page) return;
+
+    applyCanvasGeometry(page);
+    restorePageViewport(page);
+    redraw();
 
     if (resizeObserver) resizeObserver.disconnect();
     resizeObserver = new ResizeObserver(function() {
-      resizeCanvas();
+      const activePage = getPage(getNotebook(currentNotebookId), currentPageId);
+      if (!activePage) return;
+      const scale = currentCanvasScale();
+      const logicalY = scroller.scrollTop / Math.max(0.001, scale);
+      const logicalX = scroller.scrollLeft / Math.max(0.001, scale);
+      applyCanvasGeometry(activePage);
       redraw();
+      requestAnimationFrame(function() {
+        const nextScale = currentCanvasScale();
+        scroller.scrollTop = logicalY * nextScale;
+        scroller.scrollLeft = logicalX * nextScale;
+      });
     });
-    resizeObserver.observe(canvas);
+    resizeObserver.observe(scroller);
+
+    scroller.onscroll = function() {
+      const p = getPage(getNotebook(currentNotebookId), currentPageId);
+      if (!p || !canvas) return;
+      const scale = currentCanvasScale();
+      p.scrollY = scroller.scrollTop / Math.max(0.001, scale);
+      p.scrollX = scroller.scrollLeft / Math.max(0.001, scale);
+      if (scroller.scrollTop + scroller.clientHeight > scroller.scrollHeight - 260) {
+        growPage(p, PAGE_GROW_BY);
+      } else {
+        persistViewportSoon(p);
+      }
+    };
+
+    activePointers.clear();
+    gestureState = null;
+    drawPointerId = null;
+
+    function pointerPair() {
+      return Array.from(activePointers.values()).slice(0,2);
+    }
+
+    function beginTouchGesture(e) {
+      canvas.setPointerCapture && canvas.setPointerCapture(e.pointerId);
+      if (activePointers.size >= 2) {
+        if (currentDraft) {
+          currentDraft = null;
+          pointQueue = [];
+          drawPointerId = null;
+          clearTimeout(shapeHoldTimer);
+          redraw();
+        }
+        const pair = pointerPair();
+        const dx = pair[1].x - pair[0].x;
+        const dy = pair[1].y - pair[0].y;
+        const centerX = (pair[0].x + pair[1].x) / 2 - scroller.getBoundingClientRect().left;
+        const centerY = (pair[0].y + pair[1].y) / 2 - scroller.getBoundingClientRect().top;
+        const p = getPage(getNotebook(currentNotebookId), currentPageId);
+        gestureState = {
+          type: 'pinch',
+          startDistance: Math.max(10, Math.hypot(dx,dy)),
+          startZoom: p ? p.zoom : 1,
+          anchorX: centerX,
+          anchorY: centerY
+        };
+      } else {
+        gestureState = {
+          type: 'pan',
+          pointerId: e.pointerId,
+          startX: e.clientX,
+          startY: e.clientY,
+          startScrollLeft: scroller.scrollLeft,
+          startScrollTop: scroller.scrollTop
+        };
+      }
+    }
 
     canvas.onpointerdown = function(e) {
+      const nbNow = getNotebook(currentNotebookId);
+      const pageNow = getPage(nbNow, currentPageId);
+      if (!nbNow || !pageNow) return;
+
+      if (e.pointerType === 'pen' && !pencilDetected) {
+        pencilDetected = true;
+        flashStatus('✏️ Apple Pencil / stylus detectado');
+      }
+
+      if (e.pointerType === 'touch') {
+        activePointers.set(e.pointerId, { x:e.clientX, y:e.clientY });
+        if (fingerPanMode || activePointers.size >= 2 || readOnly) {
+          beginTouchGesture(e);
+          e.preventDefault();
+          return;
+        }
+      }
+
       if (readOnly) return;
-      const nb = getNotebook(currentNotebookId);
-      const page = getPage(nb, currentPageId);
-      if (!nb || !page) return;
       canvas.setPointerCapture && canvas.setPointerCapture(e.pointerId);
+      drawPointerId = e.pointerId;
       const tool = getTool();
       if (tool === 'eraser' && getEraserMode && getEraserMode() === 'stroke') {
         strokeEraseActive = true;
@@ -2073,25 +2358,63 @@
         e.preventDefault();
         return;
       }
+
+      const startPoint = pointFromEvent(e);
+      maybeGrowPage(pageNow, startPoint.y);
+      const width = Number(document.getElementById('nbWidth').value || 4);
       currentDraft = {
         id: uuid(),
-        tool,
+        tool: tool,
+        brush: getBrush ? getBrush() : 'ballpoint',
+        coordVersion: 2,
         color: document.getElementById('nbColor').value || '#16264a',
-        width: Number(document.getElementById('nbWidth').value || 4),
-        points: [pointFromEvent(e)]
+        width: tool === 'highlighter' ? Math.max(10, width * 3) : width,
+        startedAt: Date.now(),
+        points: [startPoint]
       };
+      if (tool === 'line') {
+        currentDraft.shapeType = 'line';
+        currentDraft.shapeData = { x1:startPoint.x, y1:startPoint.y, x2:startPoint.x, y2:startPoint.y };
+      } else if (tool === 'shape') {
+        currentDraft.shapeType = (getShapeType && getShapeType()) || 'circle';
+        currentDraft.shapeData = { x1:startPoint.x, y1:startPoint.y, x2:startPoint.x, y2:startPoint.y };
+      }
       pointQueue = [];
       broadcast('stroke-start', {
-        notebookId: nb.id,
-        pageId: page.id,
+        notebookId: nbNow.id,
+        pageId: pageNow.id,
         stroke: currentDraft
       });
+      scheduleShapeHoldSnap();
       redraw();
       e.preventDefault();
     };
 
     canvas.onpointermove = function(e) {
-      if (readOnly) return;
+      if (e.pointerType === 'touch' && activePointers.has(e.pointerId)) {
+        activePointers.set(e.pointerId, { x:e.clientX, y:e.clientY });
+        if (gestureState && (fingerPanMode || activePointers.size >= 2 || readOnly)) {
+          if (activePointers.size >= 2) {
+            if (gestureState.type !== 'pinch') beginTouchGesture(e);
+            const pair = pointerPair();
+            const dx = pair[1].x - pair[0].x;
+            const dy = pair[1].y - pair[0].y;
+            const dist = Math.max(10, Math.hypot(dx,dy));
+            const p = getPage(getNotebook(currentNotebookId), currentPageId);
+            if (p && gestureState && gestureState.startDistance) {
+              const nextZoom = gestureState.startZoom * dist / gestureState.startDistance;
+              setPageZoom(p, nextZoom, { x:gestureState.anchorX, y:gestureState.anchorY });
+            }
+          } else if (gestureState.type === 'pan' && gestureState.pointerId === e.pointerId) {
+            scroller.scrollLeft = gestureState.startScrollLeft - (e.clientX - gestureState.startX);
+            scroller.scrollTop = gestureState.startScrollTop - (e.clientY - gestureState.startY);
+          }
+          e.preventDefault();
+          return;
+        }
+      }
+
+      if (readOnly || drawPointerId !== e.pointerId) return;
       if (strokeEraseActive) {
         eraseWholeStrokesAtEvent(e);
         e.preventDefault();
@@ -2099,38 +2422,87 @@
       }
       if (!currentDraft) return;
       const p = pointFromEvent(e);
-      const last = currentDraft.points[currentDraft.points.length - 1];
-      if (last && Math.hypot(p.x - last.x, p.y - last.y) < 0.0012) return;
-      currentDraft.points.push(p);
-      pointQueue.push(p);
-      schedulePointFlush();
+      const activePage = getPage(getNotebook(currentNotebookId), currentPageId);
+      maybeGrowPage(activePage, p.y);
+
+      if (currentDraft.snappedByHold && ['pen','highlighter'].includes(currentDraft.tool)) {
+        delete currentDraft.shapeType;
+        delete currentDraft.shapeData;
+        currentDraft.snappedByHold = false;
+      }
+
+      if (currentDraft.tool === 'line' || currentDraft.tool === 'shape') {
+        currentDraft.points = [currentDraft.points[0], p];
+        currentDraft.shapeData.x2 = p.x;
+        currentDraft.shapeData.y2 = p.y;
+      } else {
+        const last = currentDraft.points[currentDraft.points.length - 1];
+        const logicalDistance = last ? Math.hypot((p.x-last.x)*LOGICAL_WIDTH, p.y-last.y) : 999;
+        if (logicalDistance < 1.4) return;
+        currentDraft.points.push(p);
+        pointQueue.push(p);
+        schedulePointFlush();
+        scheduleShapeHoldSnap();
+      }
       redraw();
       e.preventDefault();
     };
 
     const finish = function(e) {
+      if (e.pointerType === 'touch' && activePointers.has(e.pointerId)) {
+        activePointers.delete(e.pointerId);
+        if (activePointers.size >= 2) {
+          beginTouchGesture(e);
+        } else if (activePointers.size === 1 && (fingerPanMode || readOnly)) {
+          const rem = Array.from(activePointers.entries())[0];
+          gestureState = {
+            type:'pan',
+            pointerId:rem[0],
+            startX:rem[1].x,
+            startY:rem[1].y,
+            startScrollLeft:scroller.scrollLeft,
+            startScrollTop:scroller.scrollTop
+          };
+        } else {
+          gestureState = null;
+        }
+        if (drawPointerId !== e.pointerId) {
+          e.preventDefault();
+          return;
+        }
+      }
+
+      if (drawPointerId !== null && e.pointerId !== drawPointerId) return;
+      clearTimeout(shapeHoldTimer);
+
       if (strokeEraseActive) {
         strokeEraseActive = false;
         strokeEraseSeen.clear();
+        drawPointerId = null;
         if (e) e.preventDefault();
         return;
       }
-      if (!currentDraft) return;
+      if (!currentDraft) {
+        drawPointerId = null;
+        return;
+      }
       flushPoints();
-      const nb = getNotebook(currentNotebookId);
-      const page = getPage(nb, currentPageId);
-      if (nb && page) {
-        if (!Array.isArray(page.strokes)) page.strokes = [];
-        page.strokes.push(currentDraft);
-        nb.updatedAt = new Date().toISOString();
+      const nbFinish = getNotebook(currentNotebookId);
+      const pageFinish = getPage(nbFinish, currentPageId);
+      if (nbFinish && pageFinish) {
+        if (!Array.isArray(pageFinish.strokes)) pageFinish.strokes = [];
+        pageFinish.redoStack = [];
+        pageFinish.strokes.push(currentDraft);
+        nbFinish.updatedAt = new Date().toISOString();
         persist();
-        broadcast('stroke-end', {
-          notebookId: nb.id,
-          pageId: page.id,
-          strokeId: currentDraft.id
+        broadcast('stroke-final', {
+          notebookId: nbFinish.id,
+          pageId: pageFinish.id,
+          stroke: currentDraft
         });
       }
       currentDraft = null;
+      drawPointerId = null;
       redraw();
       refreshPageManagerPreviews();
       renderNotebookList();
@@ -2140,59 +2512,71 @@
     canvas.onpointerup = finish;
     canvas.onpointercancel = finish;
     canvas.onpointerleave = function(e) {
-      if (currentDraft && e.buttons === 0) finish(e);
+      if (e.pointerType === 'mouse' && currentDraft && e.buttons === 0) finish(e);
     };
   }
 
   function pointFromEvent(e) {
     const r = canvas.getBoundingClientRect();
+    const page = getPage(getNotebook(currentNotebookId), currentPageId);
+    const scale = Math.max(0.001, r.width / LOGICAL_WIDTH);
     return {
-      x: Math.max(0, Math.min(1, (e.clientX - r.left) / Math.max(1, r.width))),
-      y: Math.max(0, Math.min(1, (e.clientY - r.top) / Math.max(1, r.height))),
+      x: clamp((e.clientX - r.left) / Math.max(1, r.width), 0, 1),
+      y: clamp((e.clientY - r.top) / scale, 0, page ? page.height : INITIAL_PAGE_HEIGHT),
       p: typeof e.pressure === 'number' && e.pressure > 0 ? e.pressure : 0.5
     };
   }
 
-  function resizeCanvas() {
-    if (!canvas) return;
-    const r = canvas.getBoundingClientRect();
-    const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
-    const w = Math.max(1, Math.round(r.width * dpr));
-    const h = Math.max(1, Math.round(r.height * dpr));
-    if (canvas.width !== w || canvas.height !== h) {
-      canvas.width = w;
-      canvas.height = h;
-    }
-  }
-
   function drawStroke(stroke) {
     if (!ctx || !canvas || !stroke || !stroke.points || !stroke.points.length) return;
-    const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
-    const w = canvas.width / dpr;
-    const h = canvas.height / dpr;
+    const page = getPage(getNotebook(currentNotebookId), currentPageId);
+    if (!page) return;
+    const rect = canvas.getBoundingClientRect();
+    const cssW = Math.max(1, rect.width);
+    const cssH = Math.max(1, rect.height);
+    const sx = canvas.width / cssW;
+    const sy = canvas.height / cssH;
+    const logicalScale = cssW / LOGICAL_WIDTH;
+    const mapX = function(x) { return x * cssW; };
+    const mapY = function(y) { return y * logicalScale; };
+
     ctx.save();
-    ctx.scale(dpr, dpr);
+    ctx.setTransform(sx, 0, 0, sy, 0, 0);
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.lineWidth = Math.max(1, Number(stroke.width || 4));
     ctx.globalCompositeOperation = stroke.tool === 'eraser' ? 'destination-out' : 'source-over';
     ctx.strokeStyle = stroke.color || '#16264a';
+    ctx.globalAlpha = stroke.tool === 'highlighter' ? 0.28 : (stroke.brush === 'pencil' ? 0.68 : 1);
+    let width = Math.max(0.8, Number(stroke.width || 4) * logicalScale);
+    if (stroke.brush === 'fountain' && stroke.points.length) {
+      const avg = stroke.points.reduce(function(sum,p){ return sum + (Number(p.p)||0.5); },0) / stroke.points.length;
+      width *= 0.72 + avg * 0.9;
+    } else if (stroke.brush === 'pencil') {
+      width *= 0.86;
+    }
+    ctx.lineWidth = width;
+
+    if (drawShapePath(ctx, stroke, mapX, mapY)) {
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
 
     const pts = stroke.points;
     ctx.beginPath();
-    ctx.moveTo(pts[0].x * w, pts[0].y * h);
+    ctx.moveTo(mapX(pts[0].x), mapY(pts[0].y));
     if (pts.length === 1) {
-      ctx.lineTo(pts[0].x * w + 0.01, pts[0].y * h + 0.01);
+      ctx.lineTo(mapX(pts[0].x) + 0.01, mapY(pts[0].y) + 0.01);
     } else {
       for (let i = 1; i < pts.length; i++) {
         const prev = pts[i - 1];
         const cur = pts[i];
-        const mx = (prev.x + cur.x) * 0.5 * w;
-        const my = (prev.y + cur.y) * 0.5 * h;
-        ctx.quadraticCurveTo(prev.x * w, prev.y * h, mx, my);
+        const mx = mapX((prev.x + cur.x) * 0.5);
+        const my = mapY((prev.y + cur.y) * 0.5);
+        ctx.quadraticCurveTo(mapX(prev.x), mapY(prev.y), mx, my);
       }
       const last = pts[pts.length - 1];
-      ctx.lineTo(last.x * w, last.y * h);
+      ctx.lineTo(mapX(last.x), mapY(last.y));
     }
     ctx.stroke();
     ctx.restore();
@@ -2200,8 +2584,7 @@
 
   function redraw() {
     if (!ctx || !canvas) return;
-    const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.setTransform(1,0,0,1,0,0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     const nb = getNotebook(currentNotebookId);
     const page = getPage(nb, currentPageId);
@@ -2334,11 +2717,15 @@
   function sendFocus() {
     const nb = getNotebook(currentNotebookId);
     if (!nb) return;
+    const page = getPage(nb, currentPageId);
     broadcast('focus', {
       notebookId: nb.id,
       pageId: currentPageId,
       title: nb.title,
-      editing: !readOnly
+      editing: !readOnly,
+      scrollY: page ? page.scrollY : 0,
+      scrollX: page ? page.scrollX : 0,
+      zoom: page ? page.zoom : 1
     });
   }
 
