@@ -14,6 +14,9 @@
   const PAGE_GROW_BY = 1200;
   const MAX_CANVAS_PIXELS = 14000000;
   const MAX_CANVAS_DIMENSION = 15000;
+  const MIN_ZOOM = 0.30;
+  const MAX_ZOOM = 4.0;
+  const VIEWPORT_OVERSCAN = 320;
   const CHANNEL_VERSION = 'v1';
 
   let currentNotebookId = null;
@@ -50,6 +53,9 @@
   let shapeHoldTimer = null;
   let scrollPersistTimer = null;
   let pencilDetected = false;
+  let redrawFrame = 0;
+  let lastRenderStats = { drawn: 0, skipped: 0, backingScale: 1 };
+  let viewportResizeTimer = null;
 
   function uuid() {
     return crypto && crypto.randomUUID
@@ -98,7 +104,7 @@
       page.height = Number(page.height) > 0 ? Number(page.height) : INITIAL_PAGE_HEIGHT;
     }
     page.height = Math.max(INITIAL_PAGE_HEIGHT, Number(page.height) || INITIAL_PAGE_HEIGHT);
-    page.zoom = clamp(Number(page.zoom) || 1, 0.45, 3.5);
+    page.zoom = clamp(Number(page.zoom) || 1, MIN_ZOOM, MAX_ZOOM);
     page.scrollY = Math.max(0, Number(page.scrollY) || 0);
     page.scrollX = Math.max(0, Number(page.scrollX) || 0);
     if (!Array.isArray(page.redoStack)) page.redoStack = [];
@@ -616,7 +622,7 @@
     copy.createdAt = now;
     copy.coordVersion = 2;
     copy.height = Math.max(INITIAL_PAGE_HEIGHT, Number(copy.height) || INITIAL_PAGE_HEIGHT);
-    copy.zoom = clamp(Number(copy.zoom) || 1, 0.45, 3.5);
+    copy.zoom = clamp(Number(copy.zoom) || 1, MIN_ZOOM, MAX_ZOOM);
     copy.scrollY = 0;
     copy.scrollX = 0;
     copy.redoStack = [];
@@ -1025,6 +1031,9 @@
       '.nb-toolbar button,.nb-toolbar select,.nb-toolbar input{border:1px solid #3a4d71;background:#111d35;color:#fff;border-radius:9px;padding:8px 9px}' +
       '.nb-toolbar button.active{background:#285499;border-color:#76a7ff}' +
       '.nb-toolbar input[type=color]{width:42px;height:36px;padding:3px}.nb-toolbar input[type=range]{width:110px;padding:0}' +
+      '.nb-input-status{display:inline-flex;align-items:center;min-height:34px;padding:0 9px;border:1px solid #38527d;border-radius:999px;background:#0b152a;color:#b9c9e5;font:800 11px system-ui}.nb-input-status.pen{border-color:#3e9d79;color:#8ef0c8;background:#0d2b24}' +
+      '@media(max-width:820px){.nb-toolbar{position:sticky;top:4px;z-index:60;overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch}.nb-toolbar>*{flex:0 0 auto}.nb-toolbar label.small{display:flex;align-items:center}.nb-editor-top{gap:7px}.nb-page-manager{padding:8px}}' +
+      '@media(max-width:520px){.nb-toolbar{margin-left:-4px;margin-right:-4px;border-radius:11px}.nb-title-wrap h2{font-size:21px}.nb-actions .nb-btn{padding:7px 8px;font-size:12px}}' +
       '.nb-pages{display:flex;gap:7px;overflow:auto;padding-bottom:3px}.nb-page-tab{white-space:nowrap;border:1px solid var(--line);background:#101a31;color:#cbd5e1;border-radius:999px;padding:7px 10px;font-weight:800}' +
       '.nb-page-tab.active{background:#1b3769;color:#fff;border-color:#5e8de6}' +
       '.nb-page-manager{border:1px solid #334d77;background:#091427;border-radius:15px;padding:10px;display:grid;gap:10px}.nb-page-manager-head{display:flex;gap:7px;align-items:center;flex-wrap:wrap}.nb-page-manager-head strong{margin-right:auto}.nb-page-manager-head select{border:1px solid #38527d;background:#0f1d36;color:#fff;border-radius:9px;padding:8px;max-width:230px}.nb-page-thumbs{display:flex;gap:10px;overflow-x:auto;padding:3px 2px 8px;scroll-snap-type:x proximity}.nb-page-thumb{position:relative;flex:0 0 178px;border:1px solid #334d77;background:#0d1930;border-radius:13px;padding:8px;display:grid;gap:7px;scroll-snap-align:start}.nb-page-thumb.active{border-color:#79a6ff;box-shadow:0 0 0 2px #79a6ff33}.nb-page-thumb.selected{background:#142b50;border-color:#8bb2ff}.nb-page-thumb.dragging{opacity:.45}.nb-page-thumb.drop-target{outline:3px solid #79a6ff;outline-offset:2px}.nb-page-preview{position:relative;aspect-ratio:1.53/1;background:#fff;border:1px solid #cbd5e1;border-radius:8px;overflow:hidden;cursor:pointer}.nb-page-preview canvas{width:100%;height:100%;display:block;pointer-events:none}.nb-page-check{position:absolute;z-index:3;top:12px;left:12px;background:#071126df;border-radius:999px;padding:4px;line-height:1}.nb-page-check input{width:18px;height:18px}.nb-page-thumb-title{font-weight:850;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.nb-page-thumb-actions{display:flex;gap:5px;flex-wrap:wrap}.nb-page-thumb-actions button{padding:5px 7px;font-size:11px}.nb-insert-after{width:100%;border:1px dashed #526c97!important;background:#0a1428!important;color:#bcd0f4!important}.nb-selected-count{font-size:12px;color:#a9bad7;font-weight:800}' +
@@ -1653,6 +1662,7 @@
         '<button id="nbZoomLabel" type="button" title="Restablecer zoom">100%</button>' +
         '<button id="nbZoomIn" type="button" title="Acercar">＋</button>' +
         '<button id="nbFingerMode" type="button">☝️ Dedo mueve</button>' +
+        '<span id="nbInputStatus" class="nb-input-status" title="Entrada detectada">⌁ Touch / mouse</span>' +
         '<button id="nbClear" type="button">Limpiar página</button>' +
         '<button id="nbAddPage" type="button">＋ Página</button>' +
         '<button id="nbDeletePage" type="button">🗑 Página</button>' +
@@ -1817,6 +1827,7 @@
     if (zoomLabel) {
       const p = getPage(nb,currentPageId);
       zoomLabel.textContent = Math.round((p.zoom || 1) * 100) + '%';
+      zoomLabel.title = 'Zoom ' + Math.round((p.zoom || 1) * 100) + '% · tocar para 100%';
       zoomLabel.onclick = function() { setZoom(1); };
     }
 
@@ -2087,11 +2098,20 @@
 
   function canvasCssSize(page) {
     const scroller = document.getElementById('nbCanvasScroller');
-    const zoom = clamp(Number(page && page.zoom) || 1, 0.45, 3.5);
+    const zoom = clamp(Number(page && page.zoom) || 1, MIN_ZOOM, MAX_ZOOM);
     const fitWidth = Math.max(300, (scroller ? scroller.clientWidth : 900) - 24);
     const width = Math.max(260, fitWidth * zoom);
     const height = Math.max(400, (Number(page && page.height) || INITIAL_PAGE_HEIGHT) * width / LOGICAL_WIDTH);
     return { width, height };
+  }
+
+  function canvasMemoryBudget() {
+    const memory = Number(navigator.deviceMemory || 0);
+    const coarse = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+    if (memory && memory <= 2) return 6500000;
+    if (memory && memory <= 4) return 9000000;
+    if (coarse) return 10500000;
+    return MAX_CANVAS_PIXELS;
   }
 
   function resizeCanvas() {
@@ -2100,11 +2120,13 @@
     const cssW = Math.max(1, r.width);
     const cssH = Math.max(1, r.height);
     const device = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
-    const pixelCap = Math.sqrt(MAX_CANVAS_PIXELS / Math.max(1, cssW * cssH));
+    const budget = canvasMemoryBudget();
+    const pixelCap = Math.sqrt(budget / Math.max(1, cssW * cssH));
     const dimensionCap = Math.min(MAX_CANVAS_DIMENSION / cssW, MAX_CANVAS_DIMENSION / cssH);
-    const backingScale = Math.max(0.12, Math.min(device, pixelCap, dimensionCap));
+    const backingScale = Math.max(0.10, Math.min(device, pixelCap, dimensionCap));
     const w = Math.max(1, Math.round(cssW * backingScale));
     const h = Math.max(1, Math.round(cssH * backingScale));
+    lastRenderStats.backingScale = backingScale;
     if (canvas.width !== w || canvas.height !== h) {
       canvas.width = w;
       canvas.height = h;
@@ -2171,7 +2193,7 @@
     const ay = anchor && Number.isFinite(anchor.y) ? anchor.y : scroller.clientHeight / 2;
     const logicalX = (scroller.scrollLeft + ax) / Math.max(0.001, oldScale);
     const logicalY = (scroller.scrollTop + ay) / Math.max(0.001, oldScale);
-    page.zoom = clamp(Number(nextZoom) || 1, 0.45, 3.5);
+    page.zoom = clamp(Number(nextZoom) || 1, MIN_ZOOM, MAX_ZOOM);
     applyCanvasGeometry(page);
     redraw();
     requestAnimationFrame(function() {
@@ -2278,12 +2300,33 @@
     });
     resizeObserver.observe(scroller);
 
+    const viewport = window.visualViewport;
+    const onViewportResize = function() {
+      clearTimeout(viewportResizeTimer);
+      viewportResizeTimer = setTimeout(function() {
+        const p = getPage(getNotebook(currentNotebookId), currentPageId);
+        if (!p) return;
+        const logicalY = scroller.scrollTop / Math.max(0.001, currentCanvasScale());
+        applyCanvasGeometry(p);
+        requestRedraw();
+        requestAnimationFrame(function() {
+          scroller.scrollTop = logicalY * currentCanvasScale();
+        });
+      }, 80);
+    };
+    if (viewport) {
+      viewport.addEventListener('resize', onViewportResize, { passive:true });
+      viewport.addEventListener('scroll', onViewportResize, { passive:true });
+    }
+    window.addEventListener('orientationchange', onViewportResize, { passive:true });
+
     scroller.onscroll = function() {
       const p = getPage(getNotebook(currentNotebookId), currentPageId);
       if (!p || !canvas) return;
       const scale = currentCanvasScale();
       p.scrollY = scroller.scrollTop / Math.max(0.001, scale);
       p.scrollX = scroller.scrollLeft / Math.max(0.001, scale);
+      requestRedraw();
       if (scroller.scrollTop + scroller.clientHeight > scroller.scrollHeight - 260) {
         growPage(p, PAGE_GROW_BY);
       } else {
@@ -2339,9 +2382,16 @@
       const pageNow = getPage(nbNow, currentPageId);
       if (!nbNow || !pageNow) return;
 
-      if (e.pointerType === 'pen' && !pencilDetected) {
+      if (e.pointerType === 'pen') {
+        const firstDetection = !pencilDetected;
         pencilDetected = true;
-        flashStatus('✏️ Apple Pencil / stylus detectado');
+        const inputStatus = document.getElementById('nbInputStatus');
+        if (inputStatus) {
+          inputStatus.classList.add('pen');
+          const pressureText = typeof e.pressure === 'number' ? ' · presión ' + Math.round(e.pressure * 100) + '%' : '';
+          inputStatus.textContent = '✏️ Pencil/stylus' + pressureText;
+        }
+        if (firstDetection) flashStatus('✏️ Apple Pencil / stylus detectado');
       }
 
       if (e.pointerType === 'touch') {
@@ -2441,16 +2491,27 @@
         currentDraft.points = [currentDraft.points[0], p];
         currentDraft.shapeData.x2 = p.x;
         currentDraft.shapeData.y2 = p.y;
+        delete currentDraft._bounds;
+        currentDraft._boundsVersion = 0;
       } else {
-        const last = currentDraft.points[currentDraft.points.length - 1];
-        const logicalDistance = last ? Math.hypot((p.x-last.x)*LOGICAL_WIDTH, p.y-last.y) : 999;
-        if (logicalDistance < 1.4) return;
-        currentDraft.points.push(p);
-        pointQueue.push(p);
+        const rawEvents = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [e];
+        let added = false;
+        rawEvents.forEach(function(sample) {
+          const samplePoint = pointFromEvent(sample);
+          const last = currentDraft.points[currentDraft.points.length - 1];
+          const logicalDistance = last ? Math.hypot((samplePoint.x-last.x)*LOGICAL_WIDTH, samplePoint.y-last.y) : 999;
+          if (logicalDistance < 1.4) return;
+          currentDraft.points.push(samplePoint);
+          pointQueue.push(samplePoint);
+          added = true;
+        });
+        if (!added) return;
+        delete currentDraft._bounds;
+        currentDraft._boundsVersion = 0;
         schedulePointFlush();
         scheduleShapeHoldSnap();
       }
-      redraw();
+      requestRedraw();
       e.preventDefault();
     };
 
@@ -2533,6 +2594,63 @@
     };
   }
 
+  function strokeBounds(stroke) {
+    if (!stroke) return null;
+    if (stroke._bounds && stroke._boundsVersion === 2) return stroke._bounds;
+    let minX = 1, maxX = 0, minY = Infinity, maxY = -Infinity;
+    if (stroke.shapeData && stroke.shapeType) {
+      const d = stroke.shapeData;
+      minX = Math.min(d.x1, d.x2);
+      maxX = Math.max(d.x1, d.x2);
+      minY = Math.min(d.y1, d.y2);
+      maxY = Math.max(d.y1, d.y2);
+    } else if (Array.isArray(stroke.points) && stroke.points.length) {
+      stroke.points.forEach(function(p) {
+        if (!p) return;
+        minX = Math.min(minX, Number(p.x) || 0);
+        maxX = Math.max(maxX, Number(p.x) || 0);
+        minY = Math.min(minY, Number(p.y) || 0);
+        maxY = Math.max(maxY, Number(p.y) || 0);
+      });
+    } else {
+      return null;
+    }
+    const pad = Math.max(8, Number(stroke.width || 4) * 2);
+    stroke._bounds = {
+      minX: clamp(minX, 0, 1),
+      maxX: clamp(maxX, 0, 1),
+      minY: Math.max(0, minY - pad),
+      maxY: Math.max(0, maxY + pad)
+    };
+    stroke._boundsVersion = 2;
+    return stroke._bounds;
+  }
+
+  function visibleLogicalRange() {
+    const scroller = document.getElementById('nbCanvasScroller');
+    if (!scroller || !canvas) return null;
+    const scale = currentCanvasScale();
+    return {
+      minY: Math.max(0, scroller.scrollTop / Math.max(0.001, scale) - VIEWPORT_OVERSCAN),
+      maxY: (scroller.scrollTop + scroller.clientHeight) / Math.max(0.001, scale) + VIEWPORT_OVERSCAN
+    };
+  }
+
+  function strokeIsNearViewport(stroke, range) {
+    if (!range) return true;
+    const b = strokeBounds(stroke);
+    if (!b) return true;
+    return b.maxY >= range.minY && b.minY <= range.maxY;
+  }
+
+  function requestRedraw() {
+    if (redrawFrame) return;
+    redrawFrame = requestAnimationFrame(function() {
+      redrawFrame = 0;
+      redraw();
+    });
+  }
+
   function drawStroke(stroke) {
     if (!ctx || !canvas || !stroke || !stroke.points || !stroke.points.length) return;
     const page = getPage(getNotebook(currentNotebookId), currentPageId);
@@ -2594,11 +2712,25 @@
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     const nb = getNotebook(currentNotebookId);
     const page = getPage(nb, currentPageId);
-    (page && page.strokes ? page.strokes : []).forEach(drawStroke);
+    const range = visibleLogicalRange();
+    let drawn = 0;
+    let skipped = 0;
+    (page && page.strokes ? page.strokes : []).forEach(function(stroke) {
+      if (strokeIsNearViewport(stroke, range)) {
+        drawStroke(stroke);
+        drawn++;
+      } else {
+        skipped++;
+      }
+    });
     remoteDrafts.forEach(function(stroke, key) {
-      if (key.indexOf((currentNotebookId || '') + ':' + (currentPageId || '') + ':') === 0) drawStroke(stroke);
+      if (key.indexOf((currentNotebookId || '') + ':' + (currentPageId || '') + ':') === 0) {
+        if (strokeIsNearViewport(stroke, range)) drawStroke(stroke);
+      }
     });
     if (currentDraft) drawStroke(currentDraft);
+    lastRenderStats.drawn = drawn;
+    lastRenderStats.skipped = skipped;
   }
 
   function schedulePointFlush() {
@@ -2747,7 +2879,7 @@
         const remoteNb = store.notebooks[m.notebookId];
         const remotePage = getPage(remoteNb, m.pageId);
         if (remotePage) {
-          if (Number.isFinite(Number(m.zoom))) remotePage.zoom = clamp(Number(m.zoom), 0.45, 3.5);
+          if (Number.isFinite(Number(m.zoom))) remotePage.zoom = clamp(Number(m.zoom), MIN_ZOOM, MAX_ZOOM);
           if (Number.isFinite(Number(m.scrollY))) remotePage.scrollY = Math.max(0, Number(m.scrollY));
           if (Number.isFinite(Number(m.scrollX))) remotePage.scrollX = Math.max(0, Number(m.scrollX));
         }
@@ -2895,7 +3027,7 @@
       const layoutPage = getPage(nb, m.pageId);
       if (layoutPage) {
         if (Number.isFinite(Number(m.height))) layoutPage.height = Math.max(INITIAL_PAGE_HEIGHT, Number(m.height));
-        if (Number.isFinite(Number(m.zoom))) layoutPage.zoom = clamp(Number(m.zoom), 0.45, 3.5);
+        if (Number.isFinite(Number(m.zoom))) layoutPage.zoom = clamp(Number(m.zoom), MIN_ZOOM, MAX_ZOOM);
         if (currentNotebookId === nb.id && currentPageId === layoutPage.id) {
           applyCanvasGeometry(layoutPage);
           redraw();
@@ -3119,6 +3251,21 @@
         const nb = getNotebook(currentNotebookId);
         const page = getPage(nb, currentPageId);
         if (page) setPageZoom(page, value);
+      },
+      diagnostics: function() {
+        const page = getPage(getNotebook(currentNotebookId), currentPageId);
+        return {
+          pointerEvents: 'PointerEvent' in window,
+          touchPoints: navigator.maxTouchPoints || 0,
+          pencilDetected: pencilDetected,
+          fingerPanMode: fingerPanMode,
+          zoom: page ? page.zoom : null,
+          pageHeight: page ? page.height : null,
+          scrollY: page ? page.scrollY : null,
+          render: Object.assign({}, lastRenderStats),
+          canvasBudgetPixels: canvasMemoryBudget(),
+          viewport: { width: window.innerWidth, height: window.innerHeight }
+        };
       },
       createFolder: function(parentId) { return createFolder(parentId || null); },
       moveToFolder: setNotebookFolder,
