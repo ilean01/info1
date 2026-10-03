@@ -1,7 +1,30 @@
-const CACHE = 'info1-pwa-network-first-v1';
+const CACHE = 'info1-pwa-network-first-v2';
+const APP_SHELL = [
+  './',
+  './index.html',
+  './manifest.webmanifest',
+  './supabase-config.js',
+  './cloud-sync.js',
+  './cloud-settings-ui.js',
+  './device-sync.js',
+  './notebooks-realtime.js',
+  './notebooks-selection-guard.js',
+  './notebooks-selection.js',
+  './notebooks-resilience.js',
+  './notebooks-collaboration.js',
+  './notebooks-interface.js',
+  './notebooks-laser.js',
+  './supabase-media-bridge.js',
+  './icons/icon-192.png',
+  './icons/icon-512.png'
+];
 
 self.addEventListener('install', event => {
-  event.waitUntil(self.skipWaiting());
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE);
+    await Promise.allSettled(APP_SHELL.map(url => cache.add(url)));
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener('activate', event => {
@@ -21,7 +44,6 @@ self.addEventListener('fetch', event => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
 
-  // Las rutas heredadas /api no deben golpear GitHub Pages.
   if (url.pathname.includes('/api/')) {
     event.respondWith(new Response(JSON.stringify({ ok: false, legacy: true }), {
       status: 404,
@@ -30,13 +52,18 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // PDFs/materiales se sirven tal cual; nunca se reemplazan por index.html.
   if (url.pathname.includes('/materiales/')) {
-    event.respondWith(fetch(req));
+    event.respondWith((async () => {
+      try { return await fetch(req, { cache: 'no-store' }); }
+      catch (_) {
+        const cached = await caches.match(req);
+        if (cached) return cached;
+        throw _;
+      }
+    })());
     return;
   }
 
-  // Navegación y archivos de la app: red primero para tener siempre lo último.
   event.respondWith((async () => {
     try {
       const fresh = await fetch(req, { cache: 'no-store' });
