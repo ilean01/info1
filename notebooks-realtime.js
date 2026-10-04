@@ -1090,9 +1090,10 @@
       '.nb-bottom-pager button:hover{background:#eef2f7}.nb-bottom-pager button:disabled{opacity:.28;cursor:default}' +
       '.nb-bottom-count{display:flex;align-items:center;justify-content:center;min-width:82px;padding:0 12px;font:800 16px/1 system-ui;border-left:1px solid #e1e5ec;border-right:1px solid #e1e5ec;white-space:nowrap}' +
       '@media(max-width:600px){.nb-bottom-pager{bottom:max(10px,env(safe-area-inset-bottom));min-height:54px}.nb-bottom-pager button{min-width:54px;padding:0 13px}.nb-bottom-count{min-width:74px}}' +
-      '.nb-canvas-wrap{position:relative;height:min(72vh,860px);min-height:520px;border:1px solid #50617b;border-radius:16px;overflow:auto;background:#101827;overscroll-behavior:contain;touch-action:none;box-shadow:0 18px 60px #0005;scrollbar-gutter:stable}' +
-      '.nb-canvas-stage{position:relative;margin:10px auto 80px;background-color:#fff;background-image:linear-gradient(#dbe4f055 1px,transparent 1px),linear-gradient(90deg,#dbe4f055 1px,transparent 1px);background-size:28px 28px;box-shadow:0 8px 32px #0005;transform-origin:0 0}' +
-      '#info1NotebookCanvas{position:absolute;inset:0;z-index:2;display:block;width:100%;height:100%;touch-action:none;cursor:crosshair}' +
+      '.nb-canvas-wrap{position:relative;height:min(72vh,860px);min-height:520px;border:1px solid #50617b;border-radius:16px;overflow:auto;background:#101827;overscroll-behavior:contain;touch-action:none;box-shadow:0 18px 60px #0005;scrollbar-gutter:stable;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}' +
+      '.nb-canvas-wrap *{user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}' +
+      '.nb-canvas-stage{position:relative;margin:10px auto 80px;background-color:#fff;background-image:linear-gradient(#dbe4f055 1px,transparent 1px),linear-gradient(90deg,#dbe4f055 1px,transparent 1px);background-size:28px 28px;box-shadow:0 8px 32px #0005;transform-origin:0 0;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}' +
+      '#info1NotebookCanvas{position:absolute;inset:0;z-index:2;display:block;width:100%;height:100%;touch-action:none;cursor:crosshair;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;-webkit-user-drag:none}' +
       '.nb-image-bg-layer,.nb-image-layer{position:absolute;inset:0;pointer-events:none}.nb-image-bg-layer{z-index:1;overflow:hidden}.nb-image-layer{z-index:3}.nb-image-object{position:absolute;transform-origin:center center;pointer-events:auto;touch-action:none;user-select:none;-webkit-user-select:none}.nb-image-object img{display:block;width:100%;height:100%;object-fit:fill;pointer-events:none;user-select:none;-webkit-user-drag:none}.nb-image-object.selected{outline:2px solid #4f8cff;outline-offset:2px}.nb-image-object.locked{cursor:not-allowed}.nb-image-object:not(.locked){cursor:move}.nb-image-handle{position:absolute;width:22px;height:22px;border-radius:999px;background:#fff;border:2px solid #2f6fde;box-shadow:0 2px 8px #0006;pointer-events:auto}.nb-image-resize{right:-12px;bottom:-12px;cursor:nwse-resize}.nb-image-rotate{left:50%;top:-34px;transform:translateX(-50%);cursor:grab}.nb-image-rotate:after{content:"";position:absolute;left:9px;top:18px;width:2px;height:16px;background:#2f6fde}.nb-image-bg{pointer-events:none!important}.nb-image-bg img{object-fit:cover}.nb-image-tools{display:none;gap:7px;align-items:center;flex-wrap:wrap;padding:8px 10px;border:1px solid #3d5d90;background:#0b1730;border-radius:12px}.nb-image-tools.active{display:flex}.nb-image-tools .label{font-weight:900;color:#cfe0ff;margin-right:auto}.nb-drop-active{outline:3px dashed #77a5ff;outline-offset:-7px}.nb-file-hidden{display:none!important}' +
       '.nb-canvas-hint{position:sticky;left:12px;top:10px;z-index:4;display:inline-flex;background:#071126dd;color:#dbeafe;border:1px solid #ffffff22;border-radius:999px;padding:6px 9px;font:800 11px system-ui;pointer-events:none;backdrop-filter:blur(6px)}' +
       '@media(max-width:700px){.nb-canvas-wrap{height:68vh;min-height:460px}.nb-canvas-stage{margin-top:6px}}' +
@@ -3049,6 +3050,20 @@
     activePointers.clear();
     gestureState = null;
     drawPointerId = null;
+
+    // En iPad/Safari una pulsación prolongada puede intentar seleccionar el
+    // contenido de la hoja como texto. La pizarra no es contenido seleccionable.
+    if (scroller.dataset.nbSelectionGuard !== '1') {
+      scroller.dataset.nbSelectionGuard = '1';
+      const blockNativeSelection = function(ev) {
+        const target = ev.target;
+        if (target && target.closest && target.closest('input,textarea,select,[contenteditable="true"]')) return;
+        ev.preventDefault();
+      };
+      scroller.addEventListener('selectstart', blockNativeSelection, true);
+      scroller.addEventListener('contextmenu', blockNativeSelection, true);
+      scroller.addEventListener('dragstart', blockNativeSelection, true);
+    }
 
     function pointerPair() {
       return Array.from(activePointers.values()).slice(0,2);
