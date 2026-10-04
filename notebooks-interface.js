@@ -10,6 +10,7 @@
   const FOCUS_ID='nbFocusSurface';
   const FLOATING_PALETTE_ID='nbFloatingPalette';
   const FLOATING_PALETTE_KEY='info1-notebook-floating-palette-open-v1';
+  const FLOATING_MORE_KEY='info1-notebook-floating-palette-more-v1';
 
   let observer=null;
   let viewportBound=false;
@@ -73,7 +74,24 @@
       '.nb-fp-mini-label{font-size:10px;font-weight:900;color:#64748b;padding:0 2px}.nb-fp-hide{min-width:38px;width:38px;height:38px;border-radius:12px;box-shadow:none;font-size:16px;background:#f8fafc}' +
       '.nb-fp-exit{display:none!important}.nb-focus-surface.'+FULLSCREEN_CLASS+' .nb-fp-exit,.nb-focus-surface:fullscreen .nb-fp-exit,.nb-focus-surface:-webkit-full-screen .nb-fp-exit{display:inline-flex!important}' +
       '@media(max-width:850px),(orientation:portrait) and (max-width:1100px){.nb-floating-palette{right:10px;top:14px}.nb-fp-body{flex-direction:column;border-radius:19px;padding:7px;max-height:calc(100dvh - 28px);overflow:auto}.nb-fp-group{flex-direction:column;border-right:0;border-bottom:1px solid #e5e7eb;padding-right:0;padding-bottom:6px;margin-right:0;margin-bottom:1px}.nb-fp-group:last-of-type{border-bottom:0;padding-bottom:0}.nb-fp-tool,.nb-fp-action,.nb-fp-shape{min-width:44px;width:44px;height:44px;padding:0}.nb-fp-mini-label{display:none}.nb-fp-color{width:30px;height:30px}}' +
-      '@media(max-width:520px){.nb-floating-palette{right:7px;top:8px}.nb-fp-body{gap:4px;padding:5px}.nb-fp-group{gap:3px}.nb-fp-tool,.nb-fp-action,.nb-fp-shape{min-width:40px;width:40px;height:40px;font-size:18px}.nb-fp-color{width:27px;height:27px}.nb-fp-width{height:36px}}';
+      '@media(max-width:520px){.nb-floating-palette{right:7px;top:8px}.nb-fp-body{gap:4px;padding:5px}.nb-fp-group{gap:3px}.nb-fp-tool,.nb-fp-action,.nb-fp-shape{min-width:40px;width:40px;height:40px;font-size:18px}.nb-fp-color{width:27px;height:27px}.nb-fp-width{height:36px}}' +
+      '#nbEditorPanel .nb-toolbar,#nbWritingDock,#nbSelectionExtTools,#nbImageTools{display:none!important}' +
+      '.nb-floating-palette{max-width:calc(100% - 36px)}' +
+      '.nb-fp-shell{display:flex;flex-direction:column;align-items:flex-end;gap:8px;max-width:100%}' +
+      '.nb-fp-body{max-width:100%;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none}.nb-fp-body::-webkit-scrollbar{display:none}' +
+      '.nb-fp-more.active{background:#e0e7ff!important;color:#334ea0!important}' +
+      '.nb-fp-drawer{display:none;max-width:min(980px,calc(100vw - 36px));padding:10px;background:#ffffffee;border:1px solid #d9dee8;border-radius:18px;box-shadow:0 14px 42px #0003;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);color:#172033}' +
+      '.nb-floating-palette.more-open .nb-fp-drawer{display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:10px}' +
+      '.nb-fp-panel{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0;padding:8px;border:1px solid #e5e7eb;border-radius:14px;background:#f8fafc}' +
+      '.nb-fp-panel strong{width:100%;font:900 11px/1.2 system-ui;color:#64748b;text-transform:uppercase;letter-spacing:.04em}' +
+      '.nb-fp-panel button,.nb-fp-panel select,.nb-fp-panel input[type=range]{min-height:40px;border:1px solid #d6dde8;background:#fff;color:#1f2937;border-radius:10px;padding:7px 9px;font:800 12px/1 system-ui}' +
+      '.nb-fp-panel button{cursor:pointer}.nb-fp-panel button.active{background:#dbeafe;border-color:#73a7ef;color:#164e9a}' +
+      '.nb-fp-panel select{max-width:180px}.nb-fp-panel input[type=range]{padding:0;width:110px}.nb-fp-panel input[type=color]{width:40px;height:40px;padding:3px;border:1px solid #d6dde8;border-radius:10px;background:#fff}' +
+      '.nb-fp-status{display:inline-flex;align-items:center;min-height:34px;padding:0 9px;border:1px solid #d6dde8;border-radius:999px;background:#fff;color:#475569;font:800 11px/1 system-ui;white-space:nowrap}' +
+      '.nb-fp-danger{color:#b42318!important;border-color:#fecaca!important;background:#fff7f7!important}' +
+      '.nb-fp-selection-actions,.nb-fp-image-actions{display:none}.nb-floating-palette.has-selection .nb-fp-selection-actions,.nb-floating-palette.has-image .nb-fp-image-actions{display:flex}' +
+      '@media(max-width:900px){.nb-floating-palette.more-open .nb-fp-drawer{grid-template-columns:repeat(2,minmax(145px,1fr));max-height:62dvh;overflow:auto}.nb-fp-panel{align-content:flex-start}}' +
+      '@media(max-width:560px){.nb-floating-palette.more-open .nb-fp-drawer{grid-template-columns:1fr;max-width:calc(100vw - 20px);max-height:68dvh}.nb-fp-panel select{max-width:100%;flex:1}.nb-fp-panel input[type=range]{flex:1}}';
     document.head.appendChild(style);
   }
 
@@ -233,10 +251,40 @@
     return localStorage.getItem(FLOATING_PALETTE_KEY)!=='0';
   }
 
+  function paletteMoreOpen(){
+    return localStorage.getItem(FLOATING_MORE_KEY)==='1';
+  }
+
+  function setPaletteMoreOpen(open){
+    localStorage.setItem(FLOATING_MORE_KEY,open?'1':'0');
+    const palette=document.getElementById(FLOATING_PALETTE_ID);
+    if(palette)palette.classList.toggle('more-open',!!open);
+    syncFloatingPalette();
+  }
+
   function setPaletteOpen(open){
     localStorage.setItem(FLOATING_PALETTE_KEY,open?'1':'0');
     const palette=document.getElementById(FLOATING_PALETTE_ID);
     if(palette)palette.classList.toggle('collapsed',!open);
+    if(!open)setPaletteMoreOpen(false);
+  }
+
+  function setSelectValue(id,value){
+    const el=document.getElementById(id);
+    if(!el)return;
+    el.value=value;
+    el.dispatchEvent(new Event('change',{bubbles:true}));
+    setTimeout(syncFloatingPalette,0);
+  }
+
+  function clickSelectionAction(action){
+    const btn=document.querySelector('#nbSelectionExtTools [data-sel="'+action+'"]');
+    if(btn&&!btn.disabled)btn.click();
+  }
+
+  function clickImageAction(id){
+    const btn=document.getElementById(id);
+    if(btn&&!btn.disabled)btn.click();
   }
 
   function ensureFloatingPalette(surface){
@@ -244,47 +292,114 @@
     let palette=document.getElementById(FLOATING_PALETTE_ID);
     if(palette&&palette.parentNode!==surface)palette.remove();
     if(palette)return palette;
+
     palette=document.createElement('div');
     palette.id=FLOATING_PALETTE_ID;
-    palette.className='nb-floating-palette'+(paletteOpen()?'':' collapsed');
+    palette.className='nb-floating-palette'+(paletteOpen()?'':' collapsed')+(paletteMoreOpen()?' more-open':'');
     palette.innerHTML=
       '<button class="nb-fp-show" type="button" title="Mostrar herramientas">✎</button>'+
-      '<div class="nb-fp-body">'+
-        '<div class="nb-fp-group">'+
-          '<button class="nb-fp-tool" data-fptool="pen" type="button" title="Lápiz">✒️</button>'+
-          '<button class="nb-fp-tool" data-fptool="highlighter" type="button" title="Resaltador">🖍️</button>'+
-          '<button class="nb-fp-tool" data-fptool="eraser" type="button" title="Borrador">⌫</button>'+
-          '<button class="nb-fp-tool" data-fptool="line" type="button" title="Línea recta">╱</button>'+
-          '<button class="nb-fp-shape" data-fpshape="rectangle" type="button" title="Cuadrado / rectángulo">▢</button>'+
-          '<button class="nb-fp-shape" data-fpshape="circle" type="button" title="Círculo">○</button>'+
-          '<button class="nb-fp-shape" data-fpshape="triangle" type="button" title="Triángulo">△</button>'+
-          '<button class="nb-fp-tool" data-fptool="laser" type="button" title="Láser persistente">🔴</button>'+
+      '<div class="nb-fp-shell">'+
+        '<div class="nb-fp-body">'+
+          '<div class="nb-fp-group">'+
+            '<button class="nb-fp-tool" data-fptool="pen" type="button" title="Lápiz">✒️</button>'+
+            '<button class="nb-fp-tool" data-fptool="highlighter" type="button" title="Resaltador">🖍️</button>'+
+            '<button class="nb-fp-tool" data-fptool="eraser" type="button" title="Borrador">⌫</button>'+
+            '<button class="nb-fp-tool" data-fptool="lasso" type="button" title="Lazo">✂️</button>'+
+            '<button class="nb-fp-tool" data-fptool="line" type="button" title="Línea recta">╱</button>'+
+            '<button class="nb-fp-shape" data-fpshape="rectangle" type="button" title="Cuadrado / rectángulo">▢</button>'+
+            '<button class="nb-fp-shape" data-fpshape="circle" type="button" title="Círculo">○</button>'+
+            '<button class="nb-fp-shape" data-fpshape="triangle" type="button" title="Triángulo">△</button>'+
+            '<button class="nb-fp-tool" data-fptool="laser" type="button" title="Láser persistente">🔴</button>'+
+          '</div>'+
+          '<div class="nb-fp-group">'+
+            '<span class="nb-fp-color" data-fpcolor="#111827" style="background:#111827" title="Negro"></span>'+
+            '<span class="nb-fp-color" data-fpcolor="#2563eb" style="background:#2563eb" title="Azul"></span>'+
+            '<span class="nb-fp-color" data-fpcolor="#ef4444" style="background:#ef4444" title="Rojo"></span>'+
+            '<span class="nb-fp-color" data-fpcolor="#10b981" style="background:#10b981" title="Verde"></span>'+
+            '<span class="nb-fp-color custom" title="Otro color"><input data-fpcolor-custom type="color" value="#7c3aed" aria-label="Otro color"></span>'+
+          '</div>'+
+          '<div class="nb-fp-group">'+
+            '<span class="nb-fp-mini-label">Grosor</span>'+
+            '<button class="nb-fp-width" data-fpwidth="2" style="--fpw:2px" type="button" title="Fino"></button>'+
+            '<button class="nb-fp-width" data-fpwidth="4" style="--fpw:4px" type="button" title="Medio"></button>'+
+            '<button class="nb-fp-width" data-fpwidth="7" style="--fpw:7px" type="button" title="Grueso"></button>'+
+            '<button class="nb-fp-width" data-fpwidth="11" style="--fpw:11px" type="button" title="Muy grueso"></button>'+
+          '</div>'+
+          '<div class="nb-fp-group">'+
+            '<button class="nb-fp-action" data-fpaction="undo" type="button" title="Deshacer">↶</button>'+
+            '<button class="nb-fp-action" data-fpaction="redo" type="button" title="Rehacer">↷</button>'+
+            '<button class="nb-fp-action nb-fp-more" data-fpaction="more" type="button" title="Todas las herramientas">•••</button>'+
+            '<button class="nb-fp-action nb-fp-exit" data-fpaction="fullscreen" type="button" title="Salir de pantalla completa">⛶</button>'+
+            '<button class="nb-fp-hide" type="button" title="Ocultar herramientas">✕</button>'+
+          '</div>'+
         '</div>'+
-        '<div class="nb-fp-group">'+
-          '<span class="nb-fp-color" data-fpcolor="#111827" style="background:#111827" title="Negro"></span>'+
-          '<span class="nb-fp-color" data-fpcolor="#2563eb" style="background:#2563eb" title="Azul"></span>'+
-          '<span class="nb-fp-color" data-fpcolor="#ef4444" style="background:#ef4444" title="Rojo"></span>'+
-          '<span class="nb-fp-color" data-fpcolor="#10b981" style="background:#10b981" title="Verde"></span>'+
-          '<span class="nb-fp-color custom" title="Otro color"><input data-fpcolor-custom type="color" value="#7c3aed" aria-label="Otro color"></span>'+
-        '</div>'+
-        '<div class="nb-fp-group">'+
-          '<span class="nb-fp-mini-label">Grosor</span>'+
-          '<button class="nb-fp-width" data-fpwidth="2" style="--fpw:2px" type="button" title="Fino"></button>'+
-          '<button class="nb-fp-width" data-fpwidth="4" style="--fpw:4px" type="button" title="Medio"></button>'+
-          '<button class="nb-fp-width" data-fpwidth="7" style="--fpw:7px" type="button" title="Grueso"></button>'+
-          '<button class="nb-fp-width" data-fpwidth="11" style="--fpw:11px" type="button" title="Muy grueso"></button>'+
-        '</div>'+
-        '<div class="nb-fp-group">'+
-          '<button class="nb-fp-action" data-fpaction="undo" type="button" title="Deshacer">↶</button>'+
-          '<button class="nb-fp-action" data-fpaction="redo" type="button" title="Rehacer">↷</button>'+
-          '<button class="nb-fp-action nb-fp-exit" data-fpaction="fullscreen" type="button" title="Salir de pantalla completa">⛶</button>'+
-          '<button class="nb-fp-hide" type="button" title="Ocultar herramientas">✕</button>'+
+        '<div class="nb-fp-drawer">'+
+          '<div class="nb-fp-panel">'+
+            '<strong>✍️ Escritura</strong>'+
+            '<select data-fpselect="brush" aria-label="Tipo de lápiz">'+
+              '<option value="ballpoint">Bolígrafo</option><option value="fountain">Pluma</option><option value="pencil">Lápiz grafito</option>'+
+            '</select>'+
+            '<select data-fpselect="eraser" aria-label="Modo de borrador">'+
+              '<option value="pixel">Borrar parte</option><option value="stroke">Borrar trazo completo</option>'+
+            '</select>'+
+            '<button data-fpaction="finger" type="button">☝️ Dedo</button>'+
+            '<span class="nb-fp-status" data-fpstatus="input">Touch / mouse</span>'+
+          '</div>'+
+          '<div class="nb-fp-panel">'+
+            '<strong>🔍 Vista y hojas</strong>'+
+            '<button data-fpaction="zoomout" type="button">−</button>'+
+            '<button data-fpaction="zoomreset" type="button" data-fpstatus="zoom">100%</button>'+
+            '<button data-fpaction="zoomin" type="button">＋</button>'+
+            '<button data-fpaction="fullscreen" type="button">⛶ Pantalla</button>'+
+            '<button data-fpaction="library" type="button">📚 Biblioteca</button>'+
+            '<button data-fpaction="addpage" type="button">＋ Hoja</button>'+
+            '<button data-fpaction="deletepage" class="nb-fp-danger" type="button">🗑 Hoja</button>'+
+            '<button data-fpaction="mode" type="button">✍️ Editar</button>'+
+          '</div>'+
+          '<div class="nb-fp-panel">'+
+            '<strong>🖼️ Imágenes y página</strong>'+
+            '<button data-fpaction="paste" type="button">📋 Pegar</button>'+
+            '<button data-fpaction="photos" type="button">🖼️ Archivo</button>'+
+            '<button data-fpaction="camera" type="button">📷 Cámara</button>'+
+            '<button data-fpaction="clear" class="nb-fp-danger" type="button">Limpiar página</button>'+
+            '<div class="nb-fp-image-actions">'+
+              '<button data-fpimage="nbImageCrop" type="button">✂️ Recortar</button>'+
+              '<button data-fpimage="nbImageDuplicate" type="button">⧉ Duplicar</button>'+
+              '<button data-fpimage="nbImageLock" type="button">🔒 Bloquear</button>'+
+              '<button data-fpimage="nbImageFront" type="button">⬆ Frente</button>'+
+              '<button data-fpimage="nbImageBack" type="button">⬇ Atrás</button>'+
+              '<button data-fpimage="nbImageBackground" type="button">🖼 Fondo</button>'+
+              '<button data-fpimage="nbImageDelete" class="nb-fp-danger" type="button">🗑 Imagen</button>'+
+            '</div>'+
+          '</div>'+
+          '<div class="nb-fp-panel">'+
+            '<strong>🔴 Láser</strong>'+
+            '<select data-fplaser="mode" aria-label="Modo del láser"><option value="point">● Punto</option><option value="trail">〰 Trazo</option></select>'+
+            '<input data-fplaser="color" type="color" aria-label="Color del láser">'+
+            '<span class="nb-fp-mini-label">Trazo</span><input data-fplaser="width" type="range" min="2" max="24" step="1">'+
+            '<span class="nb-fp-mini-label">Punto</span><input data-fplaser="point" type="range" min="8" max="72" step="1">'+
+            '<span class="nb-fp-status" data-fpstatus="laser">Láser</span>'+
+          '</div>'+
+          '<div class="nb-fp-panel nb-fp-selection-actions">'+
+            '<strong>✂️ Selección</strong>'+
+            '<button data-fpsel="duplicate" type="button">⧉ Duplicar</button>'+
+            '<button data-fpsel="copy" type="button">Copiar</button>'+
+            '<button data-fpsel="cut" type="button">Cortar</button>'+
+            '<button data-fpsel="paste" type="button">Pegar</button>'+
+            '<button data-fpsel="group" type="button">Agrupar</button>'+
+            '<button data-fpsel="ungroup" type="button">Desagrupar</button>'+
+            '<button data-fpsel="move-page" type="button">Mover a hoja…</button>'+
+            '<button data-fpsel="copy-notebook" type="button">Copiar a cuaderno…</button>'+
+            '<button data-fpsel="delete" class="nb-fp-danger" type="button">Eliminar</button>'+
+          '</div>'+
         '</div>'+
       '</div>';
+
     surface.appendChild(palette);
 
     palette.querySelector('.nb-fp-show').onclick=()=>setPaletteOpen(true);
     palette.querySelector('.nb-fp-hide').onclick=()=>setPaletteOpen(false);
+
     palette.querySelectorAll('[data-fptool]').forEach(btn=>{
       btn.onclick=()=>{
         const tool=btn.dataset.fptool;
@@ -292,7 +407,10 @@
         else if(tool==='highlighter')proxyClick('nbHighlighter');
         else if(tool==='eraser')proxyClick('nbEraser');
         else if(tool==='line')proxyClick('nbLine');
-        else if(tool==='laser'){
+        else if(tool==='lasso'){
+          const lasso=document.getElementById('nbLassoExt')||document.getElementById('nbLasso');
+          if(lasso)lasso.click();
+        }else if(tool==='laser'){
           const laser=window.INFO1_NOTEBOOK_LASER;
           if(laser&&typeof laser.toggle==='function')laser.toggle();
           else{
@@ -303,14 +421,51 @@
         setTimeout(syncFloatingPalette,10);
       };
     });
+
     palette.querySelectorAll('[data-fpshape]').forEach(btn=>btn.onclick=()=>chooseShape(btn.dataset.fpshape));
     palette.querySelectorAll('[data-fpcolor]').forEach(el=>el.onclick=()=>setActualColor(el.dataset.fpcolor));
     const custom=palette.querySelector('[data-fpcolor-custom]');
     if(custom)custom.oninput=()=>setActualColor(custom.value);
     palette.querySelectorAll('[data-fpwidth]').forEach(btn=>btn.onclick=()=>setActualWidth(Number(btn.dataset.fpwidth)));
-    palette.querySelector('[data-fpaction="undo"]').onclick=()=>proxyClick('nbUndo');
-    palette.querySelector('[data-fpaction="redo"]').onclick=()=>proxyClick('nbRedo');
-    palette.querySelector('[data-fpaction="fullscreen"]').onclick=()=>toggleFullscreen();
+
+    const actions={
+      undo:'nbUndo',redo:'nbRedo',zoomout:'nbZoomOut',zoomreset:'nbZoomLabel',zoomin:'nbZoomIn',
+      finger:'nbFingerMode',paste:'nbPasteImage',photos:'nbPhotoLibrary',camera:'nbCameraImage',
+      clear:'nbClear',addpage:'nbAddPage',deletepage:'nbDeletePage',mode:'nbMode'
+    };
+    Object.keys(actions).forEach(action=>{
+      const el=palette.querySelector('[data-fpaction="'+action+'"]');
+      if(el)el.onclick=()=>proxyClick(actions[action]);
+    });
+    palette.querySelectorAll('[data-fpaction="fullscreen"]').forEach(el=>el.onclick=()=>toggleFullscreen());
+    const library=palette.querySelector('[data-fpaction="library"]');
+    if(library)library.onclick=async()=>{if(fullscreenActive())await exitFullscreenMode();proxyClick('nbBack');};
+    const more=palette.querySelector('[data-fpaction="more"]');
+    if(more)more.onclick=()=>setPaletteMoreOpen(!paletteMoreOpen());
+
+    palette.querySelector('[data-fpselect="brush"]').onchange=e=>setSelectValue('nbBrush',e.target.value);
+    palette.querySelector('[data-fpselect="eraser"]').onchange=e=>setSelectValue('nbEraserMode',e.target.value);
+    palette.querySelectorAll('[data-fpsel]').forEach(btn=>btn.onclick=()=>clickSelectionAction(btn.dataset.fpsel));
+    palette.querySelectorAll('[data-fpimage]').forEach(btn=>btn.onclick=()=>clickImageAction(btn.dataset.fpimage));
+
+    const laserMode=palette.querySelector('[data-fplaser="mode"]');
+    const laserColor=palette.querySelector('[data-fplaser="color"]');
+    const laserWidth=palette.querySelector('[data-fplaser="width"]');
+    const laserPoint=palette.querySelector('[data-fplaser="point"]');
+    laserMode.onchange=()=>setSelectValue('nbLaserMode',laserMode.value);
+    laserColor.oninput=()=>{
+      const el=document.getElementById('nbLaserColor');
+      if(el){el.value=laserColor.value;el.dispatchEvent(new Event('input',{bubbles:true}));}
+    };
+    laserWidth.oninput=()=>{
+      const el=document.getElementById('nbLaserWidth');
+      if(el){el.value=laserWidth.value;el.dispatchEvent(new Event('input',{bubbles:true}));}
+    };
+    laserPoint.oninput=()=>{
+      const el=document.getElementById('nbLaserPoint');
+      if(el){el.value=laserPoint.value;el.dispatchEvent(new Event('input',{bubbles:true}));}
+    };
+
     syncFloatingPalette();
     return palette;
   }
@@ -319,11 +474,14 @@
     const palette=document.getElementById(FLOATING_PALETTE_ID);
     if(!palette)return;
     palette.classList.toggle('collapsed',!paletteOpen());
+    palette.classList.toggle('more-open',paletteMoreOpen());
+
     const map={
       pen:document.getElementById('nbPen'),
       highlighter:document.getElementById('nbHighlighter'),
       eraser:document.getElementById('nbEraser'),
-      line:document.getElementById('nbLine')
+      line:document.getElementById('nbLine'),
+      lasso:document.getElementById('nbLassoExt')||document.getElementById('nbLasso')
     };
     palette.querySelectorAll('[data-fptool]').forEach(btn=>{
       const t=btn.dataset.fptool;
@@ -332,12 +490,17 @@
         : !!(map[t]&&map[t].classList.contains('active'));
       btn.classList.toggle('active',on);
     });
+
     const shape=document.getElementById('nbShape');
     palette.querySelectorAll('[data-fpshape]').forEach(btn=>{
       btn.classList.toggle('active',!!shape&&shape.classList.contains('active')&&shape.value===btn.dataset.fpshape);
     });
+
     const color=(document.getElementById('nbColor')||{}).value||'';
     palette.querySelectorAll('[data-fpcolor]').forEach(el=>el.classList.toggle('active',String(el.dataset.fpcolor).toLowerCase()===String(color).toLowerCase()));
+    const custom=palette.querySelector('[data-fpcolor-custom]');
+    if(custom&&color)custom.value=color;
+
     const width=Number((document.getElementById('nbWidth')||{}).value||4);
     let nearest=null,dist=Infinity;
     palette.querySelectorAll('[data-fpwidth]').forEach(btn=>{
@@ -346,6 +509,61 @@
       btn.classList.remove('active');
     });
     if(nearest)nearest.classList.add('active');
+
+    const brush=document.getElementById('nbBrush');
+    const pBrush=palette.querySelector('[data-fpselect="brush"]');
+    if(brush&&pBrush&&pBrush.value!==brush.value)pBrush.value=brush.value;
+
+    const eraserMode=document.getElementById('nbEraserMode');
+    const pEraser=palette.querySelector('[data-fpselect="eraser"]');
+    if(eraserMode&&pEraser&&pEraser.value!==eraserMode.value)pEraser.value=eraserMode.value;
+
+    const input=document.getElementById('nbInputStatus');
+    const pInput=palette.querySelector('[data-fpstatus="input"]');
+    if(input&&pInput)pInput.textContent=input.textContent||'Touch / mouse';
+
+    const zoom=document.getElementById('nbZoomLabel');
+    const pZoom=palette.querySelector('[data-fpstatus="zoom"]');
+    if(zoom&&pZoom)pZoom.textContent=zoom.textContent||'100%';
+
+    const finger=document.getElementById('nbFingerMode');
+    const pFinger=palette.querySelector('[data-fpaction="finger"]');
+    if(finger&&pFinger){
+      pFinger.textContent=finger.textContent||'☝️ Dedo';
+      pFinger.classList.toggle('active',finger.classList.contains('active'));
+    }
+
+    const mode=document.getElementById('nbMode');
+    const pMode=palette.querySelector('[data-fpaction="mode"]');
+    if(mode&&pMode){
+      pMode.textContent=mode.textContent||'✍️ Editar';
+      pMode.classList.toggle('active',/editar/i.test(mode.textContent||''));
+    }
+
+    const laserMode=document.getElementById('nbLaserMode');
+    const laserColor=document.getElementById('nbLaserColor');
+    const laserWidth=document.getElementById('nbLaserWidth');
+    const laserPoint=document.getElementById('nbLaserPoint');
+    const pLaserMode=palette.querySelector('[data-fplaser="mode"]');
+    const pLaserColor=palette.querySelector('[data-fplaser="color"]');
+    const pLaserWidth=palette.querySelector('[data-fplaser="width"]');
+    const pLaserPoint=palette.querySelector('[data-fplaser="point"]');
+    if(laserMode&&pLaserMode)pLaserMode.value=laserMode.value;
+    if(laserColor&&pLaserColor)pLaserColor.value=laserColor.value;
+    if(laserWidth&&pLaserWidth)pLaserWidth.value=laserWidth.value;
+    if(laserPoint&&pLaserPoint)pLaserPoint.value=laserPoint.value;
+    const laserStatus=document.getElementById('nbLaserStatus');
+    const pLaserStatus=palette.querySelector('[data-fpstatus="laser"]');
+    if(pLaserStatus)pLaserStatus.textContent=laserStatus?laserStatus.textContent:'Láser';
+
+    const selectionTools=document.getElementById('nbSelectionExtTools');
+    palette.classList.toggle('has-selection',!!(selectionTools&&!selectionTools.classList.contains('hidden')));
+
+    const imageTools=document.getElementById('nbImageTools');
+    palette.classList.toggle('has-image',!!(imageTools&&imageTools.classList.contains('active')));
+
+    const more=palette.querySelector('[data-fpaction="more"]');
+    if(more)more.classList.toggle('active',paletteMoreOpen());
   }
 
   function buildDock(){
@@ -357,7 +575,7 @@
 
     dock=document.createElement('div');
     dock.id=DOCK_ID;
-    dock.className='nb-writing-dock';
+    dock.className='nb-writing-dock nb-legacy-hidden';
     dock.innerHTML=
       '<div class="nb-writing-dock-main">'+
         '<button class="nb-qaction nb-q-library" data-qaction="library" type="button" title="Volver a la biblioteca"><span class="ico">📚</span><span class="txt">Biblioteca</span></button>'+
@@ -418,16 +636,12 @@
   function setupAdvancedToolbar(){
     const bar=document.querySelector('#nbEditorPanel .nb-toolbar');
     if(!bar)return;
-    bar.classList.add('nb-advanced-toolbar');
-    bar.classList.toggle('nb-advanced-hidden',!defaultAdvancedOpen());
+    bar.classList.add('nb-advanced-toolbar','nb-advanced-hidden');
   }
 
   function toggleAdvanced(){
-    const bar=document.querySelector('#nbEditorPanel .nb-toolbar');
-    if(!bar)return;
-    const hidden=bar.classList.toggle('nb-advanced-hidden');
-    localStorage.setItem(ADVANCED_KEY,hidden?'0':'1');
-    syncDockState();
+    setPaletteOpen(true);
+    setPaletteMoreOpen(!paletteMoreOpen());
   }
 
   function syncDockState(){
