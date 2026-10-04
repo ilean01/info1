@@ -20,6 +20,8 @@
   let gestureStart=null;
   let gestureTriggered=false;
   let activePoll=null;
+  let fullscreenRequested=false;
+  let enhancePending=false;
 
   function isEditorVisible(){
     const panel=document.getElementById('nbEditorPanel');
@@ -79,7 +81,7 @@
       '#nbEditorPanel .nb-toolbar,#nbWritingDock,#nbSelectionExtTools,#nbImageTools{display:none!important}' +
       'body.'+FULLSCREEN_BODY_CLASS+' #nbEditorPanel{position:relative!important;z-index:2147482000!important}' +
       'body.'+FULLSCREEN_BODY_CLASS+' #nbCanvasScroller{position:fixed!important;inset:0!important;z-index:2147482500!important;width:100vw!important;height:100dvh!important;min-height:0!important;border:0!important;border-radius:0!important;margin:0!important;background:#dfe5ee!important;box-shadow:none!important}' +
-      'body.'+FULLSCREEN_BODY_CLASS+' #'+FLOATING_PALETTE_ID+'{z-index:2147483000!important}' +
+      'body.'+FULLSCREEN_BODY_CLASS+' #'+FLOATING_PALETTE_ID+'{position:fixed!important;right:max(16px,env(safe-area-inset-right))!important;top:max(16px,env(safe-area-inset-top))!important;z-index:2147483000!important}' +
       '.nb-floating-palette{max-width:calc(100% - 36px)}' +
       '.nb-fp-shell{display:flex;flex-direction:column;align-items:flex-end;gap:8px;max-width:100%}' +
       '.nb-fp-body{max-width:100%;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none}.nb-fp-body::-webkit-scrollbar{display:none}' +
@@ -130,37 +132,34 @@
   }
 
   function ensureFocusSurface(){
+    const panel=document.getElementById('nbEditorPanel');
     const scroller=document.getElementById('nbCanvasScroller');
-    if(!scroller)return null;
-    let surface=document.getElementById(FOCUS_ID);
-    if(!surface){
-      surface=document.createElement('div');
-      surface.id=FOCUS_ID;
-      surface.className='nb-focus-surface';
-      const parent=scroller.parentNode;
-      parent.insertBefore(surface,scroller);
-      surface.appendChild(scroller);
-      const pager=document.getElementById('nbBottomPager');
-      if(pager)surface.appendChild(pager);
-    }else{
-      if(scroller.parentNode!==surface)surface.appendChild(scroller);
-      const pager=document.getElementById('nbBottomPager');
-      if(pager&&pager.parentNode!==surface)surface.appendChild(pager);
+    if(!panel||!scroller)return null;
+
+    // Compatibilidad: versiones anteriores envolvían físicamente el canvas.
+    // En iPad eso podía provocar recálculos/ResizeObserver continuos al abrir.
+    const legacy=document.getElementById(FOCUS_ID);
+    if(legacy&&legacy!==scroller&&legacy.contains(scroller)){
+      const parent=legacy.parentNode;
+      if(parent){
+        parent.insertBefore(scroller,legacy);
+        const pager=legacy.querySelector('#nbBottomPager');
+        if(pager)parent.insertBefore(pager,legacy.nextSibling);
+      }
+      legacy.remove();
     }
-    if(localStorage.getItem(FULLSCREEN_KEY)==='1'){
-      surface.classList.add(FULLSCREEN_CLASS);
-      document.body.classList.add(FULLSCREEN_BODY_CLASS);
-    }
-    ensureFloatingPalette(surface);
-    return surface;
+
+    // La paleta vive en el editor, pero el canvas nunca cambia de padre.
+    ensureFloatingPalette(panel);
+    return scroller;
   }
 
   function fullscreenSurface(){
-    return document.getElementById(FOCUS_ID)||ensureFocusSurface();
+    return document.getElementById('nbCanvasScroller')||ensureFocusSurface();
   }
 
   function fullscreenWanted(){
-    return localStorage.getItem(FULLSCREEN_KEY)==='1';
+    return fullscreenRequested;
   }
 
   function fullscreenActive(){
@@ -184,7 +183,7 @@
   function setPseudoFullscreen(on){
     const surface=fullscreenSurface();
     if(!surface)return;
-    localStorage.setItem(FULLSCREEN_KEY,on?'1':'0');
+    fullscreenRequested=!!on;
     surface.classList.toggle(FULLSCREEN_CLASS,!!on);
     document.body.classList.toggle(FULLSCREEN_BODY_CLASS,!!on);
     syncFullscreenButton();
@@ -201,7 +200,7 @@
         if(exit)await Promise.resolve(exit.call(document));
       }
     }catch(_){}
-    localStorage.setItem(FULLSCREEN_KEY,'0');
+    fullscreenRequested=false;
     const surface=fullscreenSurface();
     if(surface)surface.classList.remove(FULLSCREEN_CLASS);
     document.body.classList.remove(FULLSCREEN_BODY_CLASS);
@@ -828,28 +827,29 @@
     installStyles();
     bindViewport();
     bindKeyboardNavigation();
-    const onFsChange=()=>{const s=fullscreenSurface();if(localStorage.getItem(FULLSCREEN_KEY)==='1'&&s){s.classList.add(FULLSCREEN_CLASS);document.body.classList.add(FULLSCREEN_BODY_CLASS);}syncFullscreenButton();syncFloatingPalette();setTimeout(()=>{adjustPagerForKeyboard();window.dispatchEvent(new Event('resize'));},40);};
+    const onFsChange=()=>{if(fullscreenWanted())repairFullscreenState();syncFullscreenButton();syncFloatingPalette();setTimeout(()=>{adjustPagerForKeyboard();window.dispatchEvent(new Event('resize'));},40);};
     document.addEventListener('fullscreenchange',onFsChange);
     document.addEventListener('webkitfullscreenchange',onFsChange);
-    observer=new MutationObserver(mutations=>{
-      if(fullscreenWanted()) {
-        document.body.classList.add(FULLSCREEN_BODY_CLASS);
-        queueMicrotask(repairFullscreenState);
-        requestAnimationFrame(repairFullscreenState);
-      }
-      const relevant=mutations.some(m=>{
-        const t=m.target&&m.target.nodeType===1?m.target:null;
-        return !t||!t.closest||!t.closest('#'+DOCK_ID);
+    observer=new MutationObserver(()=>{
+      if(enhancePending)return;
+      enhancePending=true;
+      requestAnimationFrame(()=>{
+        enhancePending=false;
+        if(isEditorVisible()){
+          enhance();
+          repairFullscreenState();
+        }
       });
-      if(relevant)setTimeout(()=>{enhance();repairFullscreenState();},0);
     });
     const editorPanel=document.getElementById('nbEditorPanel');
-    observer.observe(editorPanel,{childList:true,subtree:true});
-    document.addEventListener('click',()=>setTimeout(()=>{syncDockState();repairFullscreenState();},0),true);
-    document.addEventListener('change',()=>setTimeout(()=>{syncDockState();repairFullscreenState();},0),true);
-    window.addEventListener('focus',()=>setTimeout(repairFullscreenState,0));
-    document.addEventListener('visibilitychange',()=>{if(!document.hidden)setTimeout(repairFullscreenState,0);});
-    activePoll=setInterval(()=>{if(isEditorVisible()){enhance();repairFullscreenState();}},250);
+    // Solo cambios estructurales directos del editor; no observar todo el subtree.
+    observer.observe(editorPanel,{childList:true});
+    document.addEventListener('click',()=>setTimeout(syncDockState,0),true);
+    document.addEventListener('change',()=>setTimeout(syncDockState,0),true);
+    window.addEventListener('focus',()=>{if(fullscreenWanted())setTimeout(repairFullscreenState,0);});
+    document.addEventListener('visibilitychange',()=>{if(!document.hidden&&fullscreenWanted())setTimeout(repairFullscreenState,0);});
+    // Fallback liviano: no rehacer la interfaz 4 veces por segundo en iPad.
+    activePoll=setInterval(()=>{if(isEditorVisible())syncDockState();},1500);
     enhance();
 
     window.INFO1_NOTEBOOK_INTERFACE={
