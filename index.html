@@ -1500,7 +1500,7 @@ setInterval(async()=>{if(!(await serverMediaAvailable()))return;try{await hydrat
   let v14ServerSyncTimer=null,v14LastSyncStatus='',syncBusy=false,syncDirty=false,syncBlocked=!!window.INFO1_BOOT?.error||(location.protocol!=='file:'&&!window.INFO1_BOOT),syncRevision=window.INFO1_BOOT?.revision||0,localSaveFailed=false;
   save=function(){
     state.__settings??={};state.__settings.lastSavedAt=new Date().toISOString();
-    try{localStorage.setItem(STORAGE_KEY,JSON.stringify(state));localStorage.setItem(STORAGE_KEY+'-v15-unsynced','1');localSaveFailed=false;}catch(e){localSaveFailed=true;}
+    try{localStorage.setItem(STORAGE_KEY,JSON.stringify(state));localStorage.setItem(STORAGE_KEY+'-v15-unsynced','1');localSaveFailed=false;window.INFO1_LOCAL_SAVE_OK=true;}catch(e){localSaveFailed=true;window.INFO1_LOCAL_SAVE_OK=false;}
     syncDirty=true;v14LastSyncStatus=localSaveFailed?' · navegador sin espacio: copia pendiente':' · copia en carpeta pendiente';renderPersistStatus();
     clearTimeout(v14ServerSyncTimer);v14ServerSyncTimer=setTimeout(flushStudyState,400);
   };
@@ -1781,14 +1781,15 @@ setInterval(renderToday,30000);
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="./supabase-config.js?v=stable-20260925-3"></script>
-<script src="./cloud-sync.js?v=live-state-20261001-1"></script>
+<script src="./cloud-sync.js?v=20261004-review1"></script>
 <script src="./cloud-settings-ui.js?v=20260925-2"></script>
-<script src="./device-sync.js?v=20261001-live4"></script>
-<script src="./notebooks-realtime.js?v=20261004-perf-1"></script>
-  <script src="./notebooks-selection-guard.js?v=20261003-1"></script>\n  <script src="./notebooks-selection.js?v=20261003-collab-1"></script>\n  <script src="./notebooks-resilience.js?v=20261003-sync-1"></script>
-  <script src="./notebooks-collaboration.js?v=20261003-1"></script>
-  <script src="./notebooks-interface.js?v=20261004-perf-1"></script>
-  <script src="./notebooks-laser.js?v=20261004-perf-1"></script>
+<script src="./device-sync.js?v=20261004-review1"></script>
+<script src="./notebooks-realtime.js?v=20261004-review1"></script>
+  <script src="./notebooks-selection.js?v=20261004-review1"></script>
+  <script src="./notebooks-resilience.js?v=20261004-review1"></script>
+  <script src="./notebooks-collaboration.js?v=20261004-review1"></script>
+  <script src="./notebooks-interface.js?v=20261004-review1"></script>
+  <script src="./notebooks-laser.js?v=20261004-review1"></script>
 <script src="./supabase-media-bridge.js?v=stable-20260925-3"></script>
 
 <script>

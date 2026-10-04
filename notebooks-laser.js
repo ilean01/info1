@@ -19,6 +19,7 @@
   let pointerId = null;
   let localSession = null;
   let channel = null;
+  let channelClient = null;
   let channelName = null;
   let ready = false;
   let observer = null;
@@ -110,8 +111,8 @@
 
   function disconnect() {
     const c = cloud();
-    if (channel && c.client) {
-      try { c.client.removeChannel(channel); } catch (_) {}
+    if (channel && channelClient) {
+      try { channelClient.removeChannel(channel); } catch (_) {}
     }
     channel = null;
     channelName = null;
@@ -126,9 +127,10 @@
       return;
     }
     const wanted = topic(c.workspaceId);
-    if (channel && channelName === wanted) return;
+    if (channel && channelClient === c.client && channelName === wanted) return;
     disconnect();
     channelName = wanted;
+    channelClient = c.client;
     channel = c.client.channel(wanted, { config: { broadcast: { self: false, ack: false } } })
       .on('broadcast', { event: 'laser' }, msg => handleRemote(msg && msg.payload ? msg.payload : {}))
       .subscribe(status => {

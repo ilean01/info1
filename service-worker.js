@@ -1,4 +1,4 @@
-const CACHE = 'info1-pwa-network-first-v2';
+const CACHE = 'info1-pwa-network-first-v3';
 const APP_SHELL = [
   './',
   './index.html',
@@ -8,7 +8,6 @@ const APP_SHELL = [
   './cloud-settings-ui.js',
   './device-sync.js',
   './notebooks-realtime.js',
-  './notebooks-selection-guard.js',
   './notebooks-selection.js',
   './notebooks-resilience.js',
   './notebooks-collaboration.js',
@@ -56,7 +55,7 @@ self.addEventListener('fetch', event => {
     event.respondWith((async () => {
       try { return await fetch(req, { cache: 'no-store' }); }
       catch (_) {
-        const cached = await caches.match(req);
+        const cached = await caches.match(req) || (APP_SHELL.some(path => new URL(path, self.registration.scope).pathname === url.pathname) ? await caches.match(req, {ignoreSearch:true}) : null);
         if (cached) return cached;
         throw _;
       }
@@ -75,7 +74,7 @@ self.addEventListener('fetch', event => {
       }
       return fresh;
     } catch (_) {
-      const cached = await caches.match(req);
+      const cached = await caches.match(req) || (APP_SHELL.some(path => new URL(path, self.registration.scope).pathname === url.pathname) ? await caches.match(req, {ignoreSearch:true}) : null);
       if (cached) return cached;
       if (req.mode === 'navigate') {
         const shell = await caches.match('./index.html') || await caches.match('./');

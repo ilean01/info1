@@ -22,6 +22,7 @@
   let desktopPullCooldown = false;
 
   let timerChannel = null;
+  let timerSetupBusy = false;
   let timerWorkspaceId = null;
   let timerLastVersion = 0;
   let timerCanonicalRow = null;
@@ -69,7 +70,7 @@
   }
 
   function hasUnsyncedHumanChanges() {
-    return userTouched && hasPendingFlag();
+    return !!window.INFO1_NOTEBOOKS?.isDrawing || (userTouched && hasPendingFlag());
   }
 
   function cloudContext() {
@@ -414,6 +415,8 @@
 
     patchSaveForSharedTimer();
     if (timerWorkspaceId === ctx.workspaceId && timerChannel) return true;
+    if (timerSetupBusy) return false;
+    timerSetupBusy = true;
 
     if (timerChannel) {
       try { await sb.removeChannel(timerChannel); } catch {}
@@ -460,6 +463,8 @@
     } catch (e) {
       console.warn('INFO1 shared timer setup:', e);
       return false;
+    } finally {
+      timerSetupBusy = false;
     }
   }
 

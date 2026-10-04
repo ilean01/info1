@@ -328,7 +328,7 @@
       if(relevant)setTimeout(enhance,0);
     });
     const editorPanel=document.getElementById('nbEditorPanel');
-    observer.observe(editorPanel||document.body,{childList:true,subtree:true});
+    observer.observe(editorPanel,{childList:true});
     document.addEventListener('click',()=>setTimeout(syncDockState,0),true);
     document.addEventListener('change',()=>setTimeout(syncDockState,0),true);
     activePoll=setInterval(()=>{if(isEditorVisible())enhance();},700);

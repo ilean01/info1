@@ -772,6 +772,11 @@
         conflict
       };
     },
+    cacheRealtimeState: next => {
+      const raw = JSON.stringify(next);
+      localStorage.setItem(KEY, raw);
+      if (!dirty && !conflict) lastSeenRaw = raw;
+    },
     pull: () => loadCloudIntoLocal(true),
     pushLocal: keepLocalAsCloud,
     connect: showAuth

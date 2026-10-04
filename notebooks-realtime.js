@@ -25,6 +25,7 @@
   let followMode = localStorage.getItem(FOLLOW_KEY) === '1';
   let channel = null;
   let channelName = null;
+  let channelClient = null;
   let channelReady = false;
   let currentDraft = null;
   let pointQueue = [];
@@ -186,6 +187,7 @@
 
   function persist() {
     const s = appState();
+    let saved = true;
     if (s[STORE_KEY]) s[STORE_KEY].updatedAt = new Date().toISOString();
     try {
       if (window.INFO1_NOTEBOOK_RESILIENCE && window.INFO1_NOTEBOOK_RESILIENCE.onPersistStart) {
@@ -193,14 +195,16 @@
       }
       if (typeof save === 'function') {
         save();
+        saved = window.INFO1_LOCAL_SAVE_OK !== false;
       } else {
         localStorage.setItem(STATE_KEY, JSON.stringify(s));
       }
     } catch (e) {
+      saved = false;
       console.warn('INFO1 cuadernos: no se pudo guardar', e);
     } finally {
       if (window.INFO1_NOTEBOOK_RESILIENCE && window.INFO1_NOTEBOOK_RESILIENCE.onPersistEnd) {
-        window.INFO1_NOTEBOOK_RESILIENCE.onPersistEnd();
+        window.INFO1_NOTEBOOK_RESILIENCE.onPersistEnd(saved);
       }
     }
   }
@@ -3146,7 +3150,8 @@
         delete currentDraft._bounds;
         currentDraft._boundsVersion = 0;
       } else {
-        const rawEvents = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [e];
+        const coalesced = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
+        const rawEvents = coalesced.length ? coalesced : [e];
         let added = false;
         rawEvents.forEach(function(sample) {
           const samplePoint = pointFromEvent(sample);
@@ -3452,19 +3457,22 @@
     const sb = window.INFO1_SUPABASE_CLIENT;
     const desired = desiredChannelName();
     if (!sb || !desired) {
+      if (channel && channelClient) channelClient.removeChannel(channel).catch(() => {});
+      channel = null; channelName = null; channelClient = null;
       channelReady = false;
       updateCloudStatus();
       return;
     }
-    if (channel && channelName === desired) return;
+    if (channel && channelClient === sb && channelName === desired) return;
 
     if (channel) {
-      try { sb.removeChannel(channel); } catch (_) {}
+      try { channelClient.removeChannel(channel); } catch (_) {}
       channel = null;
       channelReady = false;
     }
 
     channelName = desired;
+    channelClient = sb;
     channel = sb.channel(desired, { config: { broadcast: { self: false, ack: false } } })
       .on('broadcast', { event: 'nb' }, function(msg) {
         handleRemote(msg && msg.payload ? msg.payload : {});
@@ -3505,7 +3513,11 @@
       return;
     }
     try {
-      channel.send({ type: 'broadcast', event: 'nb', payload: body });
+      Promise.resolve(channel.send({ type: 'broadcast', event: 'nb', payload: body })).then(function(result) {
+        if (result !== 'ok') throw new Error('Envío no confirmado');
+      }).catch(function() {
+        window.INFO1_NOTEBOOK_RESILIENCE?.enqueueBaseEvent(kind, payload || {});
+      });
       if (window.INFO1_NOTEBOOK_RESILIENCE && window.INFO1_NOTEBOOK_RESILIENCE.onBaseBroadcast) {
         window.INFO1_NOTEBOOK_RESILIENCE.onBaseBroadcast(kind, payload || {});
       }
@@ -3532,6 +3544,20 @@
   }
 
   function handleRemote(m) {
+    if (!m || m.deviceId === deviceId()) return;
+    applyRemote(m);
+    if (!['focus','snapshot-request','stroke-start','stroke-points'].includes(m.kind)) {
+      try {
+        if (window.INFO1_CLOUD?.cacheRealtimeState) window.INFO1_CLOUD.cacheRealtimeState(appState());
+        else localStorage.setItem(STATE_KEY, JSON.stringify(appState()));
+      } catch (error) {
+        window.INFO1_NOTEBOOK_RESILIENCE?.onPersistEnd(false);
+        console.warn('INFO1 cuadernos: no se pudo guardar el cambio recibido', error);
+      }
+    }
+  }
+
+  function applyRemote(m) {
     if (!m || m.deviceId === deviceId()) return;
     const store = ensureStore();
 
@@ -3581,7 +3607,7 @@
       store.notebooks[m.notebook.id] = m.notebook;
       if (!store.order.includes(m.notebook.id)) store.order.unshift(m.notebook.id);
       renderNotebookList();
-      if (followMode || currentNotebookId === m.notebook.id) openNotebook(m.notebook.id, currentPageId || (m.notebook.pages[0] && m.notebook.pages[0].id), true, false);
+      if (followMode || currentNotebookId === m.notebook.id) openNotebook(m.notebook.id, currentPageId || (m.notebook.pages[0] && m.notebook.pages[0].id), followMode || readOnly, false);
       return;
     }
 
@@ -3912,6 +3938,14 @@
     setInterval(connectRealtime, 1200);
     setInterval(updateCloudStatus, 1200);
     openFromHash();
+    window.addEventListener('hashchange', openFromHash);
+    window.addEventListener('info1:remote-state-applied', function() {
+      renderNotebookList();
+      if (currentNotebookId && !currentDraft) {
+        if (getNotebook(currentNotebookId)) renderEditor();
+        else showList();
+      } else if (!currentNotebookId) openFromHash();
+    });
 
     window.INFO1_NOTEBOOKS = {
       createStandalone,
@@ -3930,6 +3964,7 @@
         deviceId: deviceId,
         cloudContext: cloudContext,
         isChannelReady: function() { return channelReady; },
+        getChannel: function() { return channel; },
         currentPage: function() { return getPage(getNotebook(currentNotebookId), currentPageId); },
         mediaAssets: function() { return ensureStore().mediaAssets; },
         currentNotebook: function() { return getNotebook(currentNotebookId); },
@@ -3967,6 +4002,7 @@
       open: openNotebook,
       list: function() { return ensureStore().order.map(function(id) { return ensureStore().notebooks[id]; }).filter(Boolean); },
       get current() { return currentNotebookId; },
+      get isDrawing() { return !!currentDraft; },
       get follow() { return followMode; }
     };
   }

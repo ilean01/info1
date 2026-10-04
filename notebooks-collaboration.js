@@ -12,6 +12,7 @@
   const LOCK_TTL=6500;
 
   let channel=null;
+  let channelClient=null;
   let channelName=null;
   let ready=false;
   let lastPresenceKey='';
@@ -112,7 +113,7 @@
 
   function disconnect(){
     const c=cloud();
-    if(channel&&c.client){try{c.client.removeChannel(channel);}catch(_){}}
+    if(channel&&channelClient){try{channelClient.removeChannel(channel);}catch(_){}}
     channel=null;channelName=null;ready=false;
     remoteCursors.clear();remoteLocks.clear();localLocks.clear();
     renderPeople();renderCursors();renderLocks();
@@ -120,11 +121,12 @@
 
   function connect(){
     const c=cloud();
-    if(!c.connected||!c.workspaceId||!c.client||!navigator.onLine){ if(ready) disconnect(); return; }
+    if(!c.connected||!c.workspaceId||!c.client||!navigator.onLine){ if(channel) disconnect(); return; }
     const wanted=topic(c.workspaceId);
-    if(channel&&channelName===wanted) return;
+    if(channel&&channelClient===c.client&&channelName===wanted) return;
     disconnect();
     channelName=wanted;
+    channelClient=c.client;
     channel=c.client.channel(wanted,{
       config:{
         presence:{key:deviceId()},
@@ -445,7 +447,7 @@
       });
       if(!onlyOwn) ensureUi();
     });
-    observer.observe(document.body,{childList:true,subtree:true});
+    observer.observe(document.getElementById('nbEditorPanel'),{childList:true});
     cleanupTimer=setInterval(contextTick,800);
 
     window.INFO1_NOTEBOOK_COLLABORATION={

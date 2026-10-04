@@ -171,7 +171,7 @@ p = Path('index.html')
 s = p.read_text(encoding='utf-8')
 s = re.sub(
     r'(<script src="\./device-sync\.js\?v=)[^"]+("[^>]*></script>)',
-    r'\g<1>20261001-live4\g<2>',
+    r'\g<1>20261004-review1\g<2>',
     s,
     count=1,
 )

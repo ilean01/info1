@@ -10,6 +10,8 @@
   const LOGICAL_WIDTH = 1000;
 
   let syncChannel = null;
+  let syncClient = null;
+  let queueError = false;
   let baseSender = null;
   let syncChannelName = null;
   let baseSenderName = null;
@@ -17,6 +19,7 @@
   let baseReady = false;
   let flushing = false;
   let persistDepth = 0;
+  let saveError = false;
   let settleTimer = null;
   let lastChangeAt = 0;
   let lastSavedAt = 0;
@@ -108,7 +111,7 @@
   }
 
   function saveQueue(queue) {
-    try { localStorage.setItem(QUEUE_KEY,JSON.stringify(queue.slice(-1500))); } catch (_) {}
+    try { localStorage.setItem(QUEUE_KEY,JSON.stringify(queue)); queueError=false; } catch (_) { queueError=true; }
   }
 
   function loadPendingImagePages() {
@@ -125,7 +128,7 @@
   }
 
   function durableBaseKind(kind) {
-    return ['stroke-final','stroke-delete','stroke-restored','undo','page-cleared'].includes(kind);
+    return ['notebook-created','notebook-deleted','notebook-renamed','notebook-favorite','notebook-folder','folder-created','folder-updated','folder-deleted','folder-order','page-added','page-deleted','page-layout','stroke-final','stroke-delete','stroke-restored','undo','page-cleared'].includes(kind);
   }
 
   function enqueueBaseEvent(kind,payload) {
@@ -160,9 +163,10 @@
     markChanged();
   }
 
-  function onPersistEnd() {
+  function onPersistEnd(success=true) {
     persistDepth=Math.max(0,persistDepth-1);
-    lastSavedAt=Date.now();
+    saveError=!success;
+    if (success) lastSavedAt=Date.now();
     updateStatus();
   }
 
@@ -175,11 +179,13 @@
     const c=cloud();
     const queueLength=loadQueue().length;
     const imagePending=pendingImagePages.size;
+    if (saveError || queueError || window.INFO1_LOCAL_SAVE_OK===false) return {key:'error',text:'● No se pudo guardar · exportá un backup antes de cerrar',queueLength,imagePending};
+    if (window.INFO1_CLOUD?.status?.conflict) return {key:'error',text:'● Conflicto en nube · copia local conservada',queueLength,imagePending};
     if (!navigator.onLine || !c.connected) return {key:'offline',text:'● Sin conexión · guardado localmente',queueLength,imagePending};
-    if (!ready || !baseReady || flushing || persistDepth>0 || queueLength || imagePending || Date.now()-lastChangeAt<850) {
+    if (!ready || !baseReady || flushing || persistDepth>0 || window.INFO1_CLOUD?.status?.dirty || queueLength || imagePending || Date.now()-lastChangeAt<850) {
       return {key:'syncing',text:'● Sincronizando…',queueLength,imagePending};
     }
-    return {key:'saved',text:'● Guardado',queueLength,imagePending};
+    return {key:'saved',text:'● Guardado local · conexión activa',queueLength,imagePending};
   }
 
   function ensureStatusUi() {
@@ -249,8 +255,8 @@
 
   async function channelSend(channel,event,payload) {
     if (!channel) throw new Error('canal no disponible');
-    const result=channel.send({type:'broadcast',event,payload});
-    if (result && typeof result.then==='function') await result;
+    const result=await channel.send({type:'broadcast',event,payload});
+    if (result !== 'ok') throw new Error('No se confirmó el envío: '+result);
   }
 
   function syncTopic(workspaceId) {
@@ -263,35 +269,43 @@
 
   function disconnectChannels() {
     const c=cloud();
-    const sb=c.client || window.INFO1_SUPABASE_CLIENT;
+    const sb=syncClient;
     if (sb) {
       try { if (syncChannel) sb.removeChannel(syncChannel); } catch (_) {}
-      try { if (baseSender) sb.removeChannel(baseSender); } catch (_) {}
+      // The ink channel belongs to notebooks-realtime; never remove it here.
     }
-    syncChannel=null;baseSender=null;ready=false;baseReady=false;
+    syncChannel=null;syncClient=null;baseSender=null;ready=false;baseReady=false;
   }
 
   function connect() {
     const c=cloud();
     if (!c.connected || !c.workspaceId || !c.client || !navigator.onLine) {
       if (ready || baseReady) disconnectCount++;
-      ready=false;baseReady=false;
+      disconnectChannels();
       updateStatus();
       return;
     }
 
+    const inkBridge=bridge();
+    baseSender=inkBridge && inkBridge.getChannel ? inkBridge.getChannel() : null;
+    const wasBaseReady=baseReady;
+    baseReady=!!(baseSender && inkBridge.isChannelReady());
+    if (baseReady && !wasBaseReady) setTimeout(flushAll,0);
     const wantedSync=syncTopic(c.workspaceId);
     const wantedBase=baseTopic(c.workspaceId);
-    if (syncChannel && syncChannelName===wantedSync && baseSender && baseSenderName===wantedBase) {
+    if (syncChannel && syncClient===c.client && syncChannelName===wantedSync && baseSender && baseSenderName===wantedBase) {
       updateStatus();
       return;
     }
 
+    const inkChannel=baseSender, inkReady=baseReady;
     disconnectChannels();
+    baseSender=inkChannel; baseReady=inkReady;
     syncChannelName=wantedSync;
     baseSenderName=wantedBase;
     sentAssets.clear();
 
+    syncClient=c.client;
     syncChannel=c.client.channel(wantedSync,{config:{broadcast:{self:false,ack:false}}})
       .on('broadcast',{event:'sync'},msg=>handleSync(msg && msg.payload ? msg.payload : {}))
       .subscribe(status=>{
@@ -299,18 +313,14 @@
         ready=status==='SUBSCRIBED';
         if (ready && !was) {
           reconnectCount++;
-          sendSync('hello',Object.assign({},currentIds()));
+          sendSync('hello',Object.assign({},currentIds())).catch(()=>{});
           setTimeout(flushAll,50);
         }
         updateStatus();
       });
 
-    baseSender=c.client.channel(wantedBase,{config:{broadcast:{self:false,ack:false}}})
-      .subscribe(status=>{
-        baseReady=status==='SUBSCRIBED';
-        if (baseReady) setTimeout(flushAll,60);
-        updateStatus();
-      });
+    // Reuse the subscribed core channel; a second subscribe throws in supabase-js.
+    if (baseReady) setTimeout(flushAll,60);
   }
 
   function envelope(kind,payload) {
@@ -331,27 +341,22 @@
 
   async function flushBaseQueue() {
     if (!baseReady || flushing || !navigator.onLine) return;
-    let queue=loadQueue();
+    const queue=loadQueue();
     if (!queue.length) return;
     flushing=true;updateStatus();
-    const remain=[];
-    for (let index=0;index<queue.length;index++) {
-      const item=queue[index];
-      try {
+    try {
+      for (const item of queue) {
         if (item.kind==='pages-snapshot') {
           const nb=findNotebook(item.notebookId);
           if (nb) await sendBase('pages-replaced',{notebookId:nb.id,pages:nb.pages||[],currentPageId:nb.id===(api()&&api().current)?currentIds().pageId:null});
-        } else {
-          await sendBase(item.kind,item.payload||{});
-        }
-      } catch (_) {
-        remain.push(...queue.slice(index));
-        break;
+        } else await sendBase(item.kind,item.payload||{});
+        saveQueue(loadQueue().filter(pending=>pending.id!==item.id));
       }
-      if (index%20===19) saveQueue(remain.concat(queue.slice(index+1)));
+    } catch (error) {
+      console.warn('INFO1 cuadernos: envío pendiente', error);
+    } finally {
+      flushing=false;updateStatus();
     }
-    saveQueue(remain);
-    flushing=false;lastSavedAt=Date.now();updateStatus();
   }
 
   async function flushPendingImages() {
@@ -706,13 +711,13 @@
     updateStatus();
 
     window.addEventListener('online',()=>{connect();setTimeout(flushAll,100);updateStatus();});
-    window.addEventListener('offline',()=>{disconnectCount++;ready=false;baseReady=false;updateStatus();});
+    window.addEventListener('offline',()=>{disconnectCount++;disconnectChannels();updateStatus();});
     setInterval(connect,1200);
     setInterval(trackContext,500);
     setInterval(()=>{remoteSelections.forEach((v,k)=>{if(Date.now()-(v.at||0)>15000)remoteSelections.delete(k);});renderRemoteSelections();},5000);
 
     statusObserver=new MutationObserver(()=>ensureStatusUi());
-    statusObserver.observe(document.body,{childList:true,subtree:true});
+    statusObserver.observe(document.getElementById('nbEditorPanel'),{childList:true});
 
     window.INFO1_NOTEBOOK_RESILIENCE={
       enqueueBaseEvent,
