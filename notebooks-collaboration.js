@@ -292,6 +292,7 @@
     const a=api(),b=bridge();
     const tryOpen=()=>{
       if(a&&typeof a.list==='function'&&a.list().some(nb=>nb&&nb.id===p.notebookId)){
+        if(typeof a.setFollow==='function')a.setFollow(true);
         if(typeof a.open==='function')a.open(p.notebookId,p.pageId||null,true,false);
         return true;
       }
@@ -322,7 +323,7 @@
     el.innerHTML=
       '<div class="who"><i class="dot" style="background:'+escapeHtml(p.color||colorFor(p.deviceId))+'"></i>'+
       '<div class="txt">🟢 <b>'+escapeHtml(p.name||'Otra persona')+'</b> · '+escapeHtml(action)+' en <b>'+escapeHtml(title)+'</b> · '+escapeHtml(p.device||'')+'</div></div>'+
-      '<button type="button" data-live-open>Ver ahora</button>'+
+      '<button type="button" data-live-open>Seguir en vivo</button>'+
       '<button type="button" class="close" data-live-close title="Ocultar">×</button>';
     el.querySelector('[data-live-open]').onclick=()=>openRemoteParticipant(p);
     el.querySelector('[data-live-close]').onclick=()=>el.remove();
