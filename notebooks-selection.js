@@ -535,8 +535,35 @@
 
   function commitCurrent(message) {
     const nb=currentNotebook();
+    const scroller=document.getElementById('nbCanvasScroller');
+    const viewport=scroller?{left:scroller.scrollLeft,top:scroller.scrollTop}:null;
     saveChanges([nb],message);
-    refreshEditor();
+
+    // No reconstruimos el editor al pegar/duplicar/agrupar/eliminar.
+    // Reconstruir #nbEditorPanel desmontaba la superficie de pantalla completa.
+    const a=api();
+    try {
+      if (a && a._bridge && typeof a._bridge.refresh==='function') a._bridge.refresh();
+      else refreshCanvasInPlace();
+    } catch (_) {
+      refreshCanvasInPlace();
+    }
+
+    renderOverlay();
+    highlightImages();
+    updateTools();
+
+    if(scroller&&viewport){
+      scroller.scrollLeft=viewport.left;
+      scroller.scrollTop=viewport.top;
+      const page=currentPage();
+      const k=scale();
+      if(page){
+        page.scrollX=scroller.scrollLeft/Math.max(.001,k);
+        page.scrollY=scroller.scrollTop/Math.max(.001,k);
+      }
+    }
+    syncSelectionPresence({lasso:null});
   }
 
   function commitTransformInPlace(message, viewport) {
