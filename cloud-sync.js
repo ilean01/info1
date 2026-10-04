@@ -12,6 +12,7 @@
   const UNSYNCED_KEY = KEY + '-v15-unsynced';
   const OFFLINE_KEY = 'info1-cloud-offline';
   const CLOUD_CTX_KEY = 'info1-cloud-context-v1';
+  const ACTIVE_WORKSPACE_KEY = 'info1-active-workspace-v1';
   const HYDRATED_PREFIX = 'info1-cloud-hydrated:';
 
   const sb = window.supabase.createClient(cfg.url, cfg.publishableKey, {
@@ -29,6 +30,7 @@
 
   let session = null;
   let workspace = null;
+  let workspaceMembership = null;
   let remoteRevision = 0;
   let lastSeenRaw = '';
   let dirty = false;
@@ -125,15 +127,26 @@
         userId: session.user.id,
         updatedAt: new Date().toISOString()
       }));
+      localStorage.setItem(ACTIVE_WORKSPACE_KEY, workspace.id);
     } catch {}
     window.INFO1_SUPABASE_CLIENT = sb;
     window.INFO1_CLOUD_READY = true;
+    try {
+      window.dispatchEvent(new CustomEvent('info1:workspace-changed', {
+        detail: { workspaceId: workspace.id }
+      }));
+    } catch {}
   }
 
   function clearContext() {
     window.INFO1_SUPABASE_CLIENT = null;
     window.INFO1_CLOUD_READY = false;
     try { localStorage.removeItem(CLOUD_CTX_KEY); } catch {}
+    try {
+      window.dispatchEvent(new CustomEvent('info1:workspace-changed', {
+        detail: { workspaceId: null }
+      }));
+    } catch {}
   }
 
   function bindStandardActions() {
@@ -148,6 +161,9 @@
 
     const setup = document.getElementById('info1SetupWorkspace');
     if (setup) setup.onclick = showWorkspaceSetup;
+
+    const manage = document.getElementById('info1ManageWorkspace');
+    if (manage) manage.onclick = showWorkspaceSetup;
 
     const imp = document.getElementById('info1ImportBackup');
     if (imp) imp.onclick = () => {
@@ -176,7 +192,7 @@
     badge(
       message || `☁️ Sincronizado · ${name} · rev ${remoteRevision}`,
       'ok',
-      '<button id="info1PullCloud">Cargar nube</button><button id="info1ImportBackup">Importar backup</button><button id="info1Logout">Salir</button>'
+      '<button id="info1ManageWorkspace">👥 Espacio compartido</button><button id="info1PullCloud">Cargar nube</button><button id="info1ImportBackup">Importar backup</button><button id="info1Logout">Salir</button>'
     );
     bindStandardActions();
   }
@@ -187,7 +203,7 @@
     badge(
       message,
       'warn',
-      '<button class="primary" id="info1PullCloud">Cargar nube</button><button id="info1KeepLocal">Mantener este dispositivo</button><button id="info1ImportBackup">Importar backup</button>'
+      '<button id="info1ManageWorkspace">👥 Espacio compartido</button><button class="primary" id="info1PullCloud">Cargar nube</button><button id="info1KeepLocal">Mantener este dispositivo</button><button id="info1ImportBackup">Importar backup</button>'
     );
     bindStandardActions();
   }
@@ -285,6 +301,11 @@
   async function joinWorkspace(id) {
     const clean = String(id || '').trim();
     if (!/^[0-9a-f-]{36}$/i.test(clean)) throw new Error('Código de espacio inválido.');
+
+    const before = await memberships();
+    const already = before.find(item => item?.workspace_id === clean);
+    if (already) return already;
+
     const display = session.user.user_metadata?.name || session.user.email?.split('@')[0] || 'Estudiante';
     const result = await withTimeout(
       sb.from('info1_members').insert({
@@ -296,9 +317,14 @@
       10000
     );
     if (result.error) throw result.error;
+
+    const after = await memberships();
+    const joined = after.find(item => item?.workspace_id === clean);
+    if (!joined) throw new Error('La membresía se creó, pero no pude abrir ese espacio.');
+    return joined;
   }
 
-  function showWorkspaceSetup() {
+  async function showWorkspaceSetup() {
     if (!session) {
       showAuth();
       return;
@@ -310,18 +336,56 @@
     overlay.id = 'info1CloudOverlay';
     overlay.innerHTML = `
       <div id="info1CloudCard">
-        <h2>📚 Espacio INFO 1</h2>
-        <p>Creá tu espacio o pegá el código de un espacio existente.</p>
-        <label>Código del espacio</label><input id="info1JoinCode" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+        <h2>👥 Espacio compartido INFO 1</h2>
+        <p>Vos y Elías tienen que estar dentro del <b>mismo código de espacio</b>. Desde acá podés ver tus espacios, cambiar al correcto o unirte con un código.</p>
+        <div id="info1WorkspaceChoices" style="display:grid;gap:8px;margin:12px 0"></div>
+        <label>Código del espacio compartido</label><input id="info1JoinCode" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
         <div class="row">
-          <button id="info1CreateWs">Crear espacio</button>
-          <button id="info1JoinWs" class="secondary">Unirme</button>
+          <button id="info1JoinWs">Unirme a este espacio</button>
+          <button id="info1CreateWs" class="secondary">Crear otro espacio</button>
           <button id="info1CancelWs" class="ghost">Cancelar</button>
         </div>
         <div id="info1CloudMsg"></div>
       </div>`;
     document.body.appendChild(overlay);
     const msg = overlay.querySelector('#info1CloudMsg');
+    const choices = overlay.querySelector('#info1WorkspaceChoices');
+
+    async function refreshChoices() {
+      try {
+        const list = await memberships();
+        if (!list.length) {
+          choices.innerHTML = '<div style="color:#cbd5e1">Todavía no pertenecés a ningún espacio.</div>';
+          return list;
+        }
+        choices.innerHTML = list.map(item => {
+          const ws = item?.info1_workspaces || {};
+          const id = item?.workspace_id || ws.id || '';
+          const current = workspace?.id === id;
+          const role = item?.role === 'owner' ? 'propietaria/o' : 'miembro';
+          return '<button type="button" data-use-workspace="'+id+'" class="'+(current?'primary':'secondary')+'" style="text-align:left">'+
+            (current?'✅ ':'')+(ws.name || 'INFO 1')+' · '+role+
+            '<br><small style="opacity:.8">'+id+'</small></button>';
+        }).join('');
+        choices.querySelectorAll('[data-use-workspace]').forEach(btn => {
+          btn.onclick = async () => {
+            const id = btn.dataset.useWorkspace;
+            const listNow = await memberships();
+            const chosen = listNow.find(item => item?.workspace_id === id);
+            if (!chosen) return;
+            msg.textContent = 'Cambiando al espacio compartido…';
+            overlay.remove();
+            await finishWorkspace(chosen);
+          };
+        });
+        return list;
+      } catch (e) {
+        choices.innerHTML = '<div style="color:#fecaca">No pude leer tus espacios: '+String(e?.message || e)+'</div>';
+        return [];
+      }
+    }
+
+    await refreshChoices();
 
     overlay.querySelector('#info1CreateWs').onclick = async () => {
       msg.textContent = 'Creando…';
@@ -335,11 +399,9 @@
     overlay.querySelector('#info1JoinWs').onclick = async () => {
       msg.textContent = 'Uniendo…';
       try {
-        await joinWorkspace(overlay.querySelector('#info1JoinCode').value);
-        const list = await memberships();
-        if (!list.length) throw new Error('No se pudo confirmar la membresía.');
+        const joined = await joinWorkspace(overlay.querySelector('#info1JoinCode').value);
         overlay.remove();
-        await finishWorkspace(list[0]);
+        await finishWorkspace(joined);
       } catch (e) { msg.textContent = e?.message || 'No se pudo unir.'; }
     };
 
@@ -667,13 +729,25 @@
   }
 
   async function finishWorkspace(membership) {
-    workspace = membership?.info1_workspaces || {
+    const nextWorkspace = membership?.info1_workspaces || {
       id: membership?.workspace_id,
       name: 'INFO 1'
     };
-    if (!workspace?.id) workspace = { id: membership?.workspace_id, name: 'INFO 1' };
-    if (!workspace?.id) throw new Error('No se encontró el espacio INFO 1.');
+    if (!nextWorkspace?.id) throw new Error('No se encontró el espacio INFO 1.');
 
+    if (monitor) clearInterval(monitor);
+    monitor = null;
+    if (channel) {
+      try { await sb.removeChannel(channel); } catch {}
+      channel = null;
+    }
+    clearTimeout(pushTimer);
+
+    workspaceMembership = membership || null;
+    workspace = nextWorkspace;
+    remoteRevision = 0;
+    dirty = false;
+    conflict = false;
     setContext();
     await inspectInitialState();
     startMonitoring();
@@ -691,7 +765,12 @@
         bindStandardActions();
         return;
       }
-      await finishWorkspace(list[0]);
+      let preferred = null;
+      try {
+        preferred = localStorage.getItem(ACTIVE_WORKSPACE_KEY) || parse(localStorage.getItem(CLOUD_CTX_KEY), {})?.workspaceId || null;
+      } catch {}
+      const chosen = (preferred && list.find(item => item?.workspace_id === preferred)) || list[0];
+      await finishWorkspace(chosen);
     } catch (e) {
       clearContext();
       console.error('INFO1 cloud init', e);
@@ -706,6 +785,7 @@
     try { await withTimeout(sb.auth.signOut(), 8000); } catch {}
     session = null;
     workspace = null;
+    workspaceMembership = null;
     remoteRevision = 0;
     dirty = false;
     conflict = false;
@@ -767,6 +847,9 @@
       return {
         connected: !!(session && workspace),
         workspaceId: workspace?.id || null,
+        workspaceName: workspace?.name || null,
+        role: workspaceMembership?.role || null,
+        displayName: workspaceMembership?.display_name || session?.user?.user_metadata?.name || session?.user?.email?.split('@')[0] || null,
         revision: remoteRevision,
         dirty,
         conflict
@@ -779,7 +862,9 @@
     },
     pull: () => loadCloudIntoLocal(true),
     pushLocal: keepLocalAsCloud,
-    connect: showAuth
+    connect: showAuth,
+    manageWorkspace: showWorkspaceSetup,
+    memberships
   };
 
   setTimeout(() => boot().catch(err => {
