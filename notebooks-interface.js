@@ -7,6 +7,9 @@
   const GESTURE_KEY='info1-notebook-page-gestures-v1';
   const FULLSCREEN_CLASS='nb-pizarra-fullscreen';
   const FULLSCREEN_BODY_CLASS='nb-pizarra-fullscreen-lock';
+  const FOCUS_ID='nbFocusSurface';
+  const FLOATING_PALETTE_ID='nbFloatingPalette';
+  const FLOATING_PALETTE_KEY='info1-notebook-floating-palette-open-v1';
 
   let observer=null;
   let viewportBound=false;
@@ -50,11 +53,27 @@
       '@media(max-height:620px){.nb-writing-dock{position:relative;top:auto}#nbEditorPanel .nb-editor-top{position:relative;top:auto}}';
     style.textContent +=
       'body.'+FULLSCREEN_BODY_CLASS+'{overflow:hidden!important}' +
-      '#nbEditorPanel.'+FULLSCREEN_CLASS+'{position:fixed!important;inset:0!important;z-index:2147483000!important;width:100vw!important;height:100dvh!important;max-width:none!important;margin:0!important;padding:10px!important;overflow:auto!important;background:radial-gradient(circle at top,#16264b 0,#0b1327 34%,#080e1b 100%)!important;overscroll-behavior:contain}' +
-      '#nbEditorPanel:fullscreen,#nbEditorPanel:-webkit-full-screen{width:100vw!important;height:100vh!important;max-width:none!important;margin:0!important;padding:10px!important;overflow:auto!important;background:radial-gradient(circle at top,#16264b 0,#0b1327 34%,#080e1b 100%)!important}' +
-      '#nbEditorPanel.'+FULLSCREEN_CLASS+' .nb-editor-top,#nbEditorPanel:fullscreen .nb-editor-top,#nbEditorPanel:-webkit-full-screen .nb-editor-top{top:calc(env(safe-area-inset-top,0px) + 4px)!important}' +
-      '#nbEditorPanel.'+FULLSCREEN_CLASS+' .nb-writing-dock,#nbEditorPanel:fullscreen .nb-writing-dock,#nbEditorPanel:-webkit-full-screen .nb-writing-dock{top:calc(env(safe-area-inset-top,0px) + 64px)!important}' +
-      '.nb-q-fullscreen.active{background:#2458a6!important;border-color:#8bb7ff!important;box-shadow:0 0 0 2px #5791f433!important}';
+      '.nb-focus-surface{position:relative;min-width:0;isolation:isolate}' +
+      '.nb-focus-surface.'+FULLSCREEN_CLASS+',.nb-focus-surface:fullscreen,.nb-focus-surface:-webkit-full-screen{position:fixed!important;inset:0!important;z-index:2147483000!important;width:100vw!important;height:100dvh!important;max-width:none!important;margin:0!important;padding:0!important;overflow:hidden!important;background:#e8edf5!important;overscroll-behavior:none}' +
+      '.nb-focus-surface.'+FULLSCREEN_CLASS+' #nbCanvasScroller,.nb-focus-surface:fullscreen #nbCanvasScroller,.nb-focus-surface:-webkit-full-screen #nbCanvasScroller{height:100dvh!important;min-height:0!important;width:100vw!important;border:0!important;border-radius:0!important;margin:0!important;background:#dfe5ee!important;box-shadow:none!important;scrollbar-gutter:auto}' +
+      '.nb-focus-surface.'+FULLSCREEN_CLASS+' .nb-canvas-stage,.nb-focus-surface:fullscreen .nb-canvas-stage,.nb-focus-surface:-webkit-full-screen .nb-canvas-stage{margin-top:18px!important;margin-bottom:110px!important}' +
+      '.nb-focus-surface.'+FULLSCREEN_CLASS+' .nb-canvas-hint,.nb-focus-surface:fullscreen .nb-canvas-hint,.nb-focus-surface:-webkit-full-screen .nb-canvas-hint{opacity:.55}' +
+      '.nb-q-fullscreen.active{background:#2458a6!important;border-color:#8bb7ff!important;box-shadow:0 0 0 2px #5791f433!important}' +
+      '.nb-floating-palette{position:absolute;right:18px;top:18px;z-index:26000;display:flex;align-items:flex-start;gap:8px;pointer-events:auto;user-select:none;-webkit-user-select:none;font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}' +
+      '.nb-focus-surface.'+FULLSCREEN_CLASS+' .nb-floating-palette,.nb-focus-surface:fullscreen .nb-floating-palette,.nb-focus-surface:-webkit-full-screen .nb-floating-palette{position:fixed;right:max(16px,env(safe-area-inset-right));top:max(16px,env(safe-area-inset-top))}' +
+      '.nb-fp-show,.nb-fp-hide{appearance:none;border:1px solid #d8dee8;background:#fff;color:#172033;border-radius:18px;box-shadow:0 10px 30px #0002;min-width:48px;height:48px;font-size:22px;font-weight:900;cursor:pointer;touch-action:manipulation}' +
+      '.nb-fp-show{display:none;border-radius:999px}.nb-floating-palette.collapsed .nb-fp-show{display:inline-flex;align-items:center;justify-content:center}.nb-floating-palette.collapsed .nb-fp-body{display:none}' +
+      '.nb-fp-body{display:flex;align-items:center;gap:7px;padding:7px;background:#ffffffee;border:1px solid #d9dee8;border-radius:20px;box-shadow:0 14px 42px #0003;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}' +
+      '.nb-fp-group{display:flex;align-items:center;gap:5px;padding-right:7px;margin-right:1px;border-right:1px solid #e5e7eb}.nb-fp-group:last-of-type{border-right:0;padding-right:0}' +
+      '.nb-fp-tool,.nb-fp-action,.nb-fp-width,.nb-fp-shape{appearance:none;border:0;background:transparent;color:#202633;border-radius:12px;min-width:42px;height:42px;padding:0 9px;display:inline-flex;align-items:center;justify-content:center;font-size:20px;font-weight:850;cursor:pointer;touch-action:manipulation;transition:.14s ease}' +
+      '.nb-fp-tool:hover,.nb-fp-action:hover,.nb-fp-width:hover,.nb-fp-shape:hover{background:#edf2f8}.nb-fp-tool.active,.nb-fp-shape.active{background:#dbeafe;color:#164e9a;box-shadow:inset 0 0 0 2px #73a7ef55}.nb-fp-tool[data-fptool="laser"].active{background:#fee2e2;color:#b91c1c;box-shadow:inset 0 0 0 2px #ef444455}' +
+      '.nb-fp-color{appearance:none;width:31px;height:31px;border-radius:999px;border:2px solid #fff;box-shadow:0 0 0 1px #cbd5e1;cursor:pointer;padding:0}.nb-fp-color.active{box-shadow:0 0 0 3px #4f82e7}' +
+      '.nb-fp-color.custom{overflow:hidden;background:conic-gradient(#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00)}.nb-fp-color.custom input{opacity:0;width:100%;height:100%;cursor:pointer}' +
+      '.nb-fp-width{min-width:34px;width:34px;padding:0;position:relative}.nb-fp-width:before{content:"";display:block;width:23px;height:var(--fpw,3px);max-height:12px;background:#111827;border-radius:999px}.nb-fp-width.active{background:#e0e7ff}' +
+      '.nb-fp-mini-label{font-size:10px;font-weight:900;color:#64748b;padding:0 2px}.nb-fp-hide{min-width:38px;width:38px;height:38px;border-radius:12px;box-shadow:none;font-size:16px;background:#f8fafc}' +
+      '.nb-fp-exit{display:none!important}.nb-focus-surface.'+FULLSCREEN_CLASS+' .nb-fp-exit,.nb-focus-surface:fullscreen .nb-fp-exit,.nb-focus-surface:-webkit-full-screen .nb-fp-exit{display:inline-flex!important}' +
+      '@media(max-width:850px),(orientation:portrait) and (max-width:1100px){.nb-floating-palette{right:10px;top:14px}.nb-fp-body{flex-direction:column;border-radius:19px;padding:7px;max-height:calc(100dvh - 28px);overflow:auto}.nb-fp-group{flex-direction:column;border-right:0;border-bottom:1px solid #e5e7eb;padding-right:0;padding-bottom:6px;margin-right:0;margin-bottom:1px}.nb-fp-group:last-of-type{border-bottom:0;padding-bottom:0}.nb-fp-tool,.nb-fp-action,.nb-fp-shape{min-width:44px;width:44px;height:44px;padding:0}.nb-fp-mini-label{display:none}.nb-fp-color{width:30px;height:30px}}' +
+      '@media(max-width:520px){.nb-floating-palette{right:7px;top:8px}.nb-fp-body{gap:4px;padding:5px}.nb-fp-group{gap:3px}.nb-fp-tool,.nb-fp-action,.nb-fp-shape{min-width:40px;width:40px;height:40px;font-size:18px}.nb-fp-color{width:27px;height:27px}.nb-fp-width{height:36px}}';
     document.head.appendChild(style);
   }
 
@@ -88,53 +107,79 @@
     return document.fullscreenElement||document.webkitFullscreenElement||null;
   }
 
-  function fullscreenPanel(){
-    return document.getElementById('nbEditorPanel');
+  function ensureFocusSurface(){
+    const scroller=document.getElementById('nbCanvasScroller');
+    if(!scroller)return null;
+    let surface=document.getElementById(FOCUS_ID);
+    if(!surface){
+      surface=document.createElement('div');
+      surface.id=FOCUS_ID;
+      surface.className='nb-focus-surface';
+      const parent=scroller.parentNode;
+      parent.insertBefore(surface,scroller);
+      surface.appendChild(scroller);
+      const pager=document.getElementById('nbBottomPager');
+      if(pager)surface.appendChild(pager);
+    }else{
+      if(scroller.parentNode!==surface)surface.appendChild(scroller);
+      const pager=document.getElementById('nbBottomPager');
+      if(pager&&pager.parentNode!==surface)surface.appendChild(pager);
+    }
+    ensureFloatingPalette(surface);
+    return surface;
+  }
+
+  function fullscreenSurface(){
+    return document.getElementById(FOCUS_ID)||ensureFocusSurface();
   }
 
   function fullscreenActive(){
-    const panel=fullscreenPanel();
-    return !!panel&&(nativeFullscreenElement()===panel||panel.classList.contains(FULLSCREEN_CLASS));
+    const surface=fullscreenSurface();
+    return !!surface&&(nativeFullscreenElement()===surface||surface.classList.contains(FULLSCREEN_CLASS));
   }
 
   function setPseudoFullscreen(on){
-    const panel=fullscreenPanel();
-    if(!panel)return;
-    panel.classList.toggle(FULLSCREEN_CLASS,!!on);
+    const surface=fullscreenSurface();
+    if(!surface)return;
+    surface.classList.toggle(FULLSCREEN_CLASS,!!on);
     document.body.classList.toggle(FULLSCREEN_BODY_CLASS,!!on);
     syncFullscreenButton();
-    setTimeout(()=>{adjustPagerForKeyboard();window.dispatchEvent(new Event('resize'));},50);
+    syncFloatingPalette();
+    setTimeout(()=>{adjustPagerForKeyboard();window.dispatchEvent(new Event('resize'));},60);
   }
 
   async function exitFullscreenMode(){
-    const panel=fullscreenPanel();
+    const surface=fullscreenSurface();
     try{
       if(nativeFullscreenElement()){
         const exit=document.exitFullscreen||document.webkitExitFullscreen;
         if(exit)await Promise.resolve(exit.call(document));
       }
     }catch(_){}
-    if(panel)panel.classList.remove(FULLSCREEN_CLASS);
+    if(surface)surface.classList.remove(FULLSCREEN_CLASS);
     document.body.classList.remove(FULLSCREEN_BODY_CLASS);
     syncFullscreenButton();
-    setTimeout(()=>{adjustPagerForKeyboard();window.dispatchEvent(new Event('resize'));},50);
+    syncFloatingPalette();
+    setTimeout(()=>{adjustPagerForKeyboard();window.dispatchEvent(new Event('resize'));},60);
   }
 
   async function toggleFullscreen(){
-    const panel=fullscreenPanel();
-    if(!panel)return;
+    const surface=fullscreenSurface();
+    if(!surface)return;
     if(fullscreenActive()){
       await exitFullscreenMode();
       return;
     }
-    panel.classList.remove(FULLSCREEN_CLASS);
+    surface.classList.remove(FULLSCREEN_CLASS);
     document.body.classList.remove(FULLSCREEN_BODY_CLASS);
-    const request=panel.requestFullscreen||panel.webkitRequestFullscreen;
+    const request=surface.requestFullscreen||surface.webkitRequestFullscreen;
     if(request){
       try{
-        await Promise.resolve(request.call(panel));
+        await Promise.resolve(request.call(surface));
+        document.body.classList.add(FULLSCREEN_BODY_CLASS);
         syncFullscreenButton();
-        setTimeout(()=>{adjustPagerForKeyboard();window.dispatchEvent(new Event('resize'));},50);
+        syncFloatingPalette();
+        setTimeout(()=>{adjustPagerForKeyboard();window.dispatchEvent(new Event('resize'));},60);
         return;
       }catch(_){}
     }
@@ -146,10 +191,161 @@
     if(!btn)return;
     const on=fullscreenActive();
     btn.classList.toggle('active',on);
-    btn.title=on?'Salir de pantalla completa':'Pizarra en pantalla completa';
+    btn.title=on?'Salir de pantalla completa':'Mostrar solamente las hojas en pantalla completa';
     btn.innerHTML=on
       ? '<span class="ico">🗗</span><span class="txt">Salir</span>'
-      : '<span class="ico">⛶</span><span class="txt">Pantalla</span>';
+      : '<span class="ico">⛶</span><span class="txt">Hojas</span>';
+  }
+
+  function setActualColor(value){
+    const actual=document.getElementById('nbColor');
+    const quick=document.getElementById('nbQuickColor');
+    if(actual){
+      actual.value=value;
+      actual.dispatchEvent(new Event('input',{bubbles:true}));
+      actual.dispatchEvent(new Event('change',{bubbles:true}));
+    }
+    if(quick)quick.value=value;
+    syncFloatingPalette();
+  }
+
+  function setActualWidth(value){
+    const actual=document.getElementById('nbWidth');
+    const quick=document.getElementById('nbQuickWidth');
+    if(actual){
+      actual.value=String(value);
+      actual.dispatchEvent(new Event('input',{bubbles:true}));
+      actual.dispatchEvent(new Event('change',{bubbles:true}));
+    }
+    if(quick)quick.value=String(value);
+    syncFloatingPalette();
+  }
+
+  function chooseShape(value){
+    const select=document.getElementById('nbShape');
+    if(!select)return;
+    select.value=value;
+    select.dispatchEvent(new Event('change',{bubbles:true}));
+    setTimeout(syncFloatingPalette,0);
+  }
+
+  function paletteOpen(){
+    return localStorage.getItem(FLOATING_PALETTE_KEY)!=='0';
+  }
+
+  function setPaletteOpen(open){
+    localStorage.setItem(FLOATING_PALETTE_KEY,open?'1':'0');
+    const palette=document.getElementById(FLOATING_PALETTE_ID);
+    if(palette)palette.classList.toggle('collapsed',!open);
+  }
+
+  function ensureFloatingPalette(surface){
+    if(!surface)return null;
+    let palette=document.getElementById(FLOATING_PALETTE_ID);
+    if(palette&&palette.parentNode!==surface)palette.remove();
+    if(palette)return palette;
+    palette=document.createElement('div');
+    palette.id=FLOATING_PALETTE_ID;
+    palette.className='nb-floating-palette'+(paletteOpen()?'':' collapsed');
+    palette.innerHTML=
+      '<button class="nb-fp-show" type="button" title="Mostrar herramientas">✎</button>'+
+      '<div class="nb-fp-body">'+
+        '<div class="nb-fp-group">'+
+          '<button class="nb-fp-tool" data-fptool="pen" type="button" title="Lápiz">✒️</button>'+
+          '<button class="nb-fp-tool" data-fptool="highlighter" type="button" title="Resaltador">🖍️</button>'+
+          '<button class="nb-fp-tool" data-fptool="eraser" type="button" title="Borrador">⌫</button>'+
+          '<button class="nb-fp-tool" data-fptool="line" type="button" title="Línea recta">╱</button>'+
+          '<button class="nb-fp-shape" data-fpshape="rectangle" type="button" title="Cuadrado / rectángulo">▢</button>'+
+          '<button class="nb-fp-shape" data-fpshape="circle" type="button" title="Círculo">○</button>'+
+          '<button class="nb-fp-shape" data-fpshape="triangle" type="button" title="Triángulo">△</button>'+
+          '<button class="nb-fp-tool" data-fptool="laser" type="button" title="Láser persistente">🔴</button>'+
+        '</div>'+
+        '<div class="nb-fp-group">'+
+          '<span class="nb-fp-color" data-fpcolor="#111827" style="background:#111827" title="Negro"></span>'+
+          '<span class="nb-fp-color" data-fpcolor="#2563eb" style="background:#2563eb" title="Azul"></span>'+
+          '<span class="nb-fp-color" data-fpcolor="#ef4444" style="background:#ef4444" title="Rojo"></span>'+
+          '<span class="nb-fp-color" data-fpcolor="#10b981" style="background:#10b981" title="Verde"></span>'+
+          '<span class="nb-fp-color custom" title="Otro color"><input data-fpcolor-custom type="color" value="#7c3aed" aria-label="Otro color"></span>'+
+        '</div>'+
+        '<div class="nb-fp-group">'+
+          '<span class="nb-fp-mini-label">Grosor</span>'+
+          '<button class="nb-fp-width" data-fpwidth="2" style="--fpw:2px" type="button" title="Fino"></button>'+
+          '<button class="nb-fp-width" data-fpwidth="4" style="--fpw:4px" type="button" title="Medio"></button>'+
+          '<button class="nb-fp-width" data-fpwidth="7" style="--fpw:7px" type="button" title="Grueso"></button>'+
+          '<button class="nb-fp-width" data-fpwidth="11" style="--fpw:11px" type="button" title="Muy grueso"></button>'+
+        '</div>'+
+        '<div class="nb-fp-group">'+
+          '<button class="nb-fp-action" data-fpaction="undo" type="button" title="Deshacer">↶</button>'+
+          '<button class="nb-fp-action" data-fpaction="redo" type="button" title="Rehacer">↷</button>'+
+          '<button class="nb-fp-action nb-fp-exit" data-fpaction="fullscreen" type="button" title="Salir de pantalla completa">⛶</button>'+
+          '<button class="nb-fp-hide" type="button" title="Ocultar herramientas">✕</button>'+
+        '</div>'+
+      '</div>';
+    surface.appendChild(palette);
+
+    palette.querySelector('.nb-fp-show').onclick=()=>setPaletteOpen(true);
+    palette.querySelector('.nb-fp-hide').onclick=()=>setPaletteOpen(false);
+    palette.querySelectorAll('[data-fptool]').forEach(btn=>{
+      btn.onclick=()=>{
+        const tool=btn.dataset.fptool;
+        if(tool==='pen')proxyClick('nbPen');
+        else if(tool==='highlighter')proxyClick('nbHighlighter');
+        else if(tool==='eraser')proxyClick('nbEraser');
+        else if(tool==='line')proxyClick('nbLine');
+        else if(tool==='laser'){
+          const laser=window.INFO1_NOTEBOOK_LASER;
+          if(laser&&typeof laser.toggle==='function')laser.toggle();
+          else{
+            const q=document.getElementById('nbLaserQuick')||document.getElementById('nbLaserTool');
+            if(q)q.click();
+          }
+        }
+        setTimeout(syncFloatingPalette,10);
+      };
+    });
+    palette.querySelectorAll('[data-fpshape]').forEach(btn=>btn.onclick=()=>chooseShape(btn.dataset.fpshape));
+    palette.querySelectorAll('[data-fpcolor]').forEach(el=>el.onclick=()=>setActualColor(el.dataset.fpcolor));
+    const custom=palette.querySelector('[data-fpcolor-custom]');
+    if(custom)custom.oninput=()=>setActualColor(custom.value);
+    palette.querySelectorAll('[data-fpwidth]').forEach(btn=>btn.onclick=()=>setActualWidth(Number(btn.dataset.fpwidth)));
+    palette.querySelector('[data-fpaction="undo"]').onclick=()=>proxyClick('nbUndo');
+    palette.querySelector('[data-fpaction="redo"]').onclick=()=>proxyClick('nbRedo');
+    palette.querySelector('[data-fpaction="fullscreen"]').onclick=()=>toggleFullscreen();
+    syncFloatingPalette();
+    return palette;
+  }
+
+  function syncFloatingPalette(){
+    const palette=document.getElementById(FLOATING_PALETTE_ID);
+    if(!palette)return;
+    palette.classList.toggle('collapsed',!paletteOpen());
+    const map={
+      pen:document.getElementById('nbPen'),
+      highlighter:document.getElementById('nbHighlighter'),
+      eraser:document.getElementById('nbEraser'),
+      line:document.getElementById('nbLine')
+    };
+    palette.querySelectorAll('[data-fptool]').forEach(btn=>{
+      const t=btn.dataset.fptool;
+      const on=t==='laser'
+        ? !!(window.INFO1_NOTEBOOK_LASER&&window.INFO1_NOTEBOOK_LASER.active)
+        : !!(map[t]&&map[t].classList.contains('active'));
+      btn.classList.toggle('active',on);
+    });
+    const shape=document.getElementById('nbShape');
+    palette.querySelectorAll('[data-fpshape]').forEach(btn=>{
+      btn.classList.toggle('active',!!shape&&shape.classList.contains('active')&&shape.value===btn.dataset.fpshape);
+    });
+    const color=(document.getElementById('nbColor')||{}).value||'';
+    palette.querySelectorAll('[data-fpcolor]').forEach(el=>el.classList.toggle('active',String(el.dataset.fpcolor).toLowerCase()===String(color).toLowerCase()));
+    const width=Number((document.getElementById('nbWidth')||{}).value||4);
+    let nearest=null,dist=Infinity;
+    palette.querySelectorAll('[data-fpwidth]').forEach(btn=>{
+      const d=Math.abs(Number(btn.dataset.fpwidth)-width);
+      if(d<dist){dist=d;nearest=btn;}
+      btn.classList.remove('active');
+    });
+    if(nearest)nearest.classList.add('active');
   }
 
   function buildDock(){
@@ -262,6 +458,7 @@
     const bar=document.querySelector('#nbEditorPanel .nb-toolbar');
     if(more&&bar)more.classList.toggle('active',!bar.classList.contains('nb-advanced-hidden'));
     syncFullscreenButton();
+    syncFloatingPalette();
   }
 
   function ensurePageZones(){
@@ -391,10 +588,11 @@
       editorToken=sig;
       buildDock();
       setupAdvancedToolbar();
+      ensureFocusSurface();
       ensurePageZones();
       adjustPagerForKeyboard();
     }else{
-      buildDock();setupAdvancedToolbar();ensurePageZones();
+      buildDock();setupAdvancedToolbar();ensureFocusSurface();ensurePageZones();
     }
     syncDockState();
   }
@@ -403,8 +601,9 @@
     installStyles();
     bindViewport();
     bindKeyboardNavigation();
-    document.addEventListener('fullscreenchange',()=>{syncFullscreenButton();setTimeout(adjustPagerForKeyboard,30);});
-    document.addEventListener('webkitfullscreenchange',()=>{syncFullscreenButton();setTimeout(adjustPagerForKeyboard,30);});
+    const onFsChange=()=>{if(!nativeFullscreenElement()){const s=fullscreenSurface();if(!s||!s.classList.contains(FULLSCREEN_CLASS))document.body.classList.remove(FULLSCREEN_BODY_CLASS);}syncFullscreenButton();syncFloatingPalette();setTimeout(()=>{adjustPagerForKeyboard();window.dispatchEvent(new Event('resize'));},40);};
+    document.addEventListener('fullscreenchange',onFsChange);
+    document.addEventListener('webkitfullscreenchange',onFsChange);
     observer=new MutationObserver(mutations=>{
       const relevant=mutations.some(m=>{
         const t=m.target&&m.target.nodeType===1?m.target:null;
@@ -427,6 +626,8 @@
       toggleFullscreen,
       exitFullscreen:exitFullscreenMode,
       get fullscreen(){return fullscreenActive();},
+      showTools:()=>setPaletteOpen(true),
+      hideTools:()=>setPaletteOpen(false),
       setGestures:enabled=>localStorage.setItem(GESTURE_KEY,enabled?'1':'0')
     };
   }
