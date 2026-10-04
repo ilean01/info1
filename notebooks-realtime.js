@@ -1912,16 +1912,14 @@
     );
     renderImageLayer();
 
-    // Cualquier reconstrucción del editor debe conservar la decisión del usuario
-    // de seguir en pantalla completa. Solo el botón Salir puede desactivarla.
-    if (localStorage.getItem('info1-notebook-canvas-fullscreen-v2') === '1') {
-      document.body.classList.add('nb-pizarra-fullscreen-lock');
-      requestAnimationFrame(function() {
-        const ui=window.INFO1_NOTEBOOK_INTERFACE;
-        if (ui && typeof ui.repairFullscreen==='function') ui.repairFullscreen();
-        else if (ui && typeof ui.refresh==='function') ui.refresh();
-      });
-    }
+    // Si ya estaba en pantalla completa durante esta sesión, conservarla.
+    // No restauramos un estado viejo de localStorage al abrir en iPad.
+    requestAnimationFrame(function() {
+      const notebookUi=window.INFO1_NOTEBOOK_INTERFACE;
+      if (notebookUi && notebookUi.fullscreen && typeof notebookUi.repairFullscreen==='function') {
+        notebookUi.repairFullscreen();
+      }
+    });
   }
 
   function setCurrentPage(pageId) {
