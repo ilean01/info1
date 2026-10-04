@@ -3860,9 +3860,18 @@
   }
 
   function observeApp() {
-    const observer = new MutationObserver(function() {
-      enhanceTopicCards();
-      enhanceTopicModal();
+    let pending = null;
+    const observer = new MutationObserver(function(mutations) {
+      const relevant = mutations.some(function(m) {
+        const target = m.target && m.target.nodeType === 1 ? m.target : null;
+        return !(target && target.closest && target.closest('#notebooksView'));
+      });
+      if (!relevant || pending) return;
+      pending = setTimeout(function() {
+        pending = null;
+        enhanceTopicCards();
+        enhanceTopicModal();
+      }, 80);
     });
     observer.observe(document.body, { childList: true, subtree: true });
   }
