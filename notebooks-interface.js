@@ -7,6 +7,7 @@
   const GESTURE_KEY='info1-notebook-page-gestures-v1';
   const FULLSCREEN_CLASS='nb-pizarra-fullscreen';
   const FULLSCREEN_BODY_CLASS='nb-pizarra-fullscreen-lock';
+  const FULLSCREEN_KEY='info1-notebook-canvas-fullscreen-v2';
   const FOCUS_ID='nbFocusSurface';
   const FLOATING_PALETTE_ID='nbFloatingPalette';
   const FLOATING_PALETTE_KEY='info1-notebook-floating-palette-open-v1';
@@ -143,6 +144,10 @@
       const pager=document.getElementById('nbBottomPager');
       if(pager&&pager.parentNode!==surface)surface.appendChild(pager);
     }
+    if(localStorage.getItem(FULLSCREEN_KEY)==='1'){
+      surface.classList.add(FULLSCREEN_CLASS);
+      document.body.classList.add(FULLSCREEN_BODY_CLASS);
+    }
     ensureFloatingPalette(surface);
     return surface;
   }
@@ -153,12 +158,13 @@
 
   function fullscreenActive(){
     const surface=fullscreenSurface();
-    return !!surface&&(nativeFullscreenElement()===surface||surface.classList.contains(FULLSCREEN_CLASS));
+    return !!surface&&surface.classList.contains(FULLSCREEN_CLASS);
   }
 
   function setPseudoFullscreen(on){
     const surface=fullscreenSurface();
     if(!surface)return;
+    localStorage.setItem(FULLSCREEN_KEY,on?'1':'0');
     surface.classList.toggle(FULLSCREEN_CLASS,!!on);
     document.body.classList.toggle(FULLSCREEN_BODY_CLASS,!!on);
     syncFullscreenButton();
@@ -167,13 +173,15 @@
   }
 
   async function exitFullscreenMode(){
-    const surface=fullscreenSurface();
+    // Si quedó activo un fullscreen nativo de una versión anterior, salimos una vez.
     try{
       if(nativeFullscreenElement()){
         const exit=document.exitFullscreen||document.webkitExitFullscreen;
         if(exit)await Promise.resolve(exit.call(document));
       }
     }catch(_){}
+    localStorage.setItem(FULLSCREEN_KEY,'0');
+    const surface=fullscreenSurface();
     if(surface)surface.classList.remove(FULLSCREEN_CLASS);
     document.body.classList.remove(FULLSCREEN_BODY_CLASS);
     syncFullscreenButton();
@@ -182,26 +190,10 @@
   }
 
   async function toggleFullscreen(){
-    const surface=fullscreenSurface();
-    if(!surface)return;
-    if(fullscreenActive()){
-      await exitFullscreenMode();
-      return;
-    }
-    surface.classList.remove(FULLSCREEN_CLASS);
-    document.body.classList.remove(FULLSCREEN_BODY_CLASS);
-    const request=surface.requestFullscreen||surface.webkitRequestFullscreen;
-    if(request){
-      try{
-        await Promise.resolve(request.call(surface));
-        document.body.classList.add(FULLSCREEN_BODY_CLASS);
-        syncFullscreenButton();
-        syncFloatingPalette();
-        setTimeout(()=>{adjustPagerForKeyboard();window.dispatchEvent(new Event('resize'));},60);
-        return;
-      }catch(_){}
-    }
-    setPseudoFullscreen(true);
+    // Usamos pantalla completa dentro de la app (CSS) en lugar del Fullscreen API.
+    // Así pegar, abrir la fototeca/cámara o reconstruir el editor no expulsa
+    // al usuario de la pizarra.
+    setPseudoFullscreen(!fullscreenActive());
   }
 
   function syncFullscreenButton(){
@@ -815,7 +807,7 @@
     installStyles();
     bindViewport();
     bindKeyboardNavigation();
-    const onFsChange=()=>{if(!nativeFullscreenElement()){const s=fullscreenSurface();if(!s||!s.classList.contains(FULLSCREEN_CLASS))document.body.classList.remove(FULLSCREEN_BODY_CLASS);}syncFullscreenButton();syncFloatingPalette();setTimeout(()=>{adjustPagerForKeyboard();window.dispatchEvent(new Event('resize'));},40);};
+    const onFsChange=()=>{const s=fullscreenSurface();if(localStorage.getItem(FULLSCREEN_KEY)==='1'&&s){s.classList.add(FULLSCREEN_CLASS);document.body.classList.add(FULLSCREEN_BODY_CLASS);}syncFullscreenButton();syncFloatingPalette();setTimeout(()=>{adjustPagerForKeyboard();window.dispatchEvent(new Event('resize'));},40);};
     document.addEventListener('fullscreenchange',onFsChange);
     document.addEventListener('webkitfullscreenchange',onFsChange);
     observer=new MutationObserver(mutations=>{
