@@ -84,6 +84,40 @@
     }
   }
 
+  async function preferredWorkspaceId() {
+    let serverPreferred = null;
+    try {
+      const fresh = await withTimeout(sb.auth.getUser(), 5000, 'No se pudo refrescar el espacio activo');
+      if (!fresh?.error && fresh?.data?.user) {
+        const freshUser = fresh.data.user;
+        serverPreferred = freshUser.user_metadata?.info1_workspace_id || null;
+        if (session) session = Object.assign({}, session, { user: freshUser });
+      }
+    } catch (_) {}
+
+    let localPreferred = null;
+    try {
+      localPreferred = localStorage.getItem(ACTIVE_WORKSPACE_KEY) ||
+        parse(localStorage.getItem(CLOUD_CTX_KEY), {})?.workspaceId || null;
+    } catch (_) {}
+
+    return serverPreferred || localPreferred || null;
+  }
+
+  function persistWorkspacePreference(workspaceId) {
+    if (!workspaceId || !session?.user) return;
+    try { localStorage.setItem(ACTIVE_WORKSPACE_KEY, workspaceId); } catch {}
+    if (session.user.user_metadata?.info1_workspace_id === workspaceId) return;
+
+    Promise.resolve(
+      sb.auth.updateUser({ data: { info1_workspace_id: workspaceId } })
+    ).then(result => {
+      if (result?.data?.user && session) {
+        session = Object.assign({}, session, { user: result.data.user });
+      }
+    }).catch(() => {});
+  }
+
   function addStyles() {
     if (document.getElementById('info1CloudStyles')) return;
     const style = document.createElement('style');
@@ -749,6 +783,7 @@
     dirty = false;
     conflict = false;
     setContext();
+    persistWorkspacePreference(workspace.id);
     await inspectInitialState();
     startMonitoring();
   }
@@ -765,10 +800,7 @@
         bindStandardActions();
         return;
       }
-      let preferred = null;
-      try {
-        preferred = localStorage.getItem(ACTIVE_WORKSPACE_KEY) || parse(localStorage.getItem(CLOUD_CTX_KEY), {})?.workspaceId || null;
-      } catch {}
+      const preferred = await preferredWorkspaceId();
       const chosen = (preferred && list.find(item => item?.workspace_id === preferred)) || list[0];
       await finishWorkspace(chosen);
     } catch (e) {
