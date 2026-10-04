@@ -21,6 +21,7 @@
   let gestureTriggered=false;
   let activePoll=null;
   let fullscreenRequested=false;
+  let editorWasVisible=false;
   let enhancePending=false;
 
   function isEditorVisible(){
@@ -807,7 +808,12 @@
   }
 
   function enhance(){
-    if(!isEditorVisible())return;
+    if(!isEditorVisible()){
+      editorWasVisible=false;
+      return;
+    }
+    const justOpened=!editorWasVisible;
+    editorWasVisible=true;
     installStyles();
     const sig=editorSignature();
     if(sig!==editorToken){
@@ -820,6 +826,10 @@
     }else{
       buildDock();setupAdvancedToolbar();ensureFocusSurface();ensurePageZones();
     }
+    // Cada vez que se abre una pizarra/cuaderno, entrar directamente
+    // en la vista de hojas a pantalla completa. Si el usuario sale
+    // manualmente, no se fuerza de nuevo hasta que cierre y vuelva a abrir.
+    if(justOpened&&!fullscreenActive())setPseudoFullscreen(true);
     syncDockState();
   }
 
@@ -838,6 +848,9 @@
         if(isEditorVisible()){
           enhance();
           repairFullscreenState();
+        }else{
+          editorWasVisible=false;
+          if(fullscreenActive())exitFullscreenMode();
         }
       });
     });
