@@ -77,6 +77,9 @@
       '@media(max-width:850px),(orientation:portrait) and (max-width:1100px){.nb-floating-palette{right:10px;top:14px}.nb-fp-body{flex-direction:column;border-radius:19px;padding:7px;max-height:calc(100dvh - 28px);overflow:auto}.nb-fp-group{flex-direction:column;border-right:0;border-bottom:1px solid #e5e7eb;padding-right:0;padding-bottom:6px;margin-right:0;margin-bottom:1px}.nb-fp-group:last-of-type{border-bottom:0;padding-bottom:0}.nb-fp-tool,.nb-fp-action,.nb-fp-shape{min-width:44px;width:44px;height:44px;padding:0}.nb-fp-mini-label{display:none}.nb-fp-color{width:30px;height:30px}}' +
       '@media(max-width:520px){.nb-floating-palette{right:7px;top:8px}.nb-fp-body{gap:4px;padding:5px}.nb-fp-group{gap:3px}.nb-fp-tool,.nb-fp-action,.nb-fp-shape{min-width:40px;width:40px;height:40px;font-size:18px}.nb-fp-color{width:27px;height:27px}.nb-fp-width{height:36px}}' +
       '#nbEditorPanel .nb-toolbar,#nbWritingDock,#nbSelectionExtTools,#nbImageTools{display:none!important}' +
+      'body.'+FULLSCREEN_BODY_CLASS+' #nbEditorPanel{position:relative!important;z-index:2147482000!important}' +
+      'body.'+FULLSCREEN_BODY_CLASS+' #nbCanvasScroller{position:fixed!important;inset:0!important;z-index:2147482500!important;width:100vw!important;height:100dvh!important;min-height:0!important;border:0!important;border-radius:0!important;margin:0!important;background:#dfe5ee!important;box-shadow:none!important}' +
+      'body.'+FULLSCREEN_BODY_CLASS+' #'+FLOATING_PALETTE_ID+'{z-index:2147483000!important}' +
       '.nb-floating-palette{max-width:calc(100% - 36px)}' +
       '.nb-fp-shell{display:flex;flex-direction:column;align-items:flex-end;gap:8px;max-width:100%}' +
       '.nb-fp-body{max-width:100%;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none}.nb-fp-body::-webkit-scrollbar{display:none}' +
@@ -156,9 +159,26 @@
     return document.getElementById(FOCUS_ID)||ensureFocusSurface();
   }
 
+  function fullscreenWanted(){
+    return localStorage.getItem(FULLSCREEN_KEY)==='1';
+  }
+
   function fullscreenActive(){
-    const surface=fullscreenSurface();
-    return !!surface&&surface.classList.contains(FULLSCREEN_CLASS);
+    return fullscreenWanted();
+  }
+
+  function repairFullscreenState(){
+    if(!fullscreenWanted())return;
+    const panel=document.getElementById('nbEditorPanel');
+    const scroller=document.getElementById('nbCanvasScroller');
+    if(!panel||panel.classList.contains('hidden')||!scroller)return;
+    document.body.classList.add(FULLSCREEN_BODY_CLASS);
+    const surface=ensureFocusSurface();
+    if(surface&&!surface.classList.contains(FULLSCREEN_CLASS)){
+      surface.classList.add(FULLSCREEN_CLASS);
+    }
+    syncFullscreenButton();
+    syncFloatingPalette();
   }
 
   function setPseudoFullscreen(on){
@@ -169,6 +189,7 @@
     document.body.classList.toggle(FULLSCREEN_BODY_CLASS,!!on);
     syncFullscreenButton();
     syncFloatingPalette();
+    if(on)requestAnimationFrame(repairFullscreenState);
     setTimeout(()=>{adjustPagerForKeyboard();window.dispatchEvent(new Event('resize'));},60);
   }
 
@@ -811,17 +832,24 @@
     document.addEventListener('fullscreenchange',onFsChange);
     document.addEventListener('webkitfullscreenchange',onFsChange);
     observer=new MutationObserver(mutations=>{
+      if(fullscreenWanted()) {
+        document.body.classList.add(FULLSCREEN_BODY_CLASS);
+        queueMicrotask(repairFullscreenState);
+        requestAnimationFrame(repairFullscreenState);
+      }
       const relevant=mutations.some(m=>{
         const t=m.target&&m.target.nodeType===1?m.target:null;
         return !t||!t.closest||!t.closest('#'+DOCK_ID);
       });
-      if(relevant)setTimeout(enhance,0);
+      if(relevant)setTimeout(()=>{enhance();repairFullscreenState();},0);
     });
     const editorPanel=document.getElementById('nbEditorPanel');
-    observer.observe(editorPanel,{childList:true});
-    document.addEventListener('click',()=>setTimeout(syncDockState,0),true);
-    document.addEventListener('change',()=>setTimeout(syncDockState,0),true);
-    activePoll=setInterval(()=>{if(isEditorVisible())enhance();},700);
+    observer.observe(editorPanel,{childList:true,subtree:true});
+    document.addEventListener('click',()=>setTimeout(()=>{syncDockState();repairFullscreenState();},0),true);
+    document.addEventListener('change',()=>setTimeout(()=>{syncDockState();repairFullscreenState();},0),true);
+    window.addEventListener('focus',()=>setTimeout(repairFullscreenState,0));
+    document.addEventListener('visibilitychange',()=>{if(!document.hidden)setTimeout(repairFullscreenState,0);});
+    activePoll=setInterval(()=>{if(isEditorVisible()){enhance();repairFullscreenState();}},250);
     enhance();
 
     window.INFO1_NOTEBOOK_INTERFACE={
@@ -832,6 +860,7 @@
       toggleFullscreen,
       exitFullscreen:exitFullscreenMode,
       get fullscreen(){return fullscreenActive();},
+      repairFullscreen:repairFullscreenState,
       showTools:()=>setPaletteOpen(true),
       hideTools:()=>setPaletteOpen(false),
       setGestures:enabled=>localStorage.setItem(GESTURE_KEY,enabled?'1':'0')
