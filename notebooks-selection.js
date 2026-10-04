@@ -520,10 +520,45 @@
     },0);
   }
 
+  function refreshCanvasInPlace() {
+    const a=api();
+    try {
+      if (a && a._bridge && typeof a._bridge.refreshCanvas==='function') {
+        a._bridge.refreshCanvas();
+        return;
+      }
+      if (a && a._bridge && typeof a._bridge.refresh==='function') a._bridge.refresh();
+    } catch (e) {
+      console.warn('INFO1 selección: no se pudo refrescar el canvas',e);
+    }
+  }
+
   function commitCurrent(message) {
     const nb=currentNotebook();
     saveChanges([nb],message);
     refreshEditor();
+  }
+
+  function commitTransformInPlace(message, viewport) {
+    const nb=currentNotebook();
+    saveChanges([nb],message);
+    refreshCanvasInPlace();
+    renderOverlay();
+    highlightImages();
+    updateTools();
+    const scroller=document.getElementById('nbCanvasScroller');
+    if (scroller && viewport) {
+      // Nunca saltar al inicio al soltar el lazo.
+      scroller.scrollLeft=viewport.left;
+      scroller.scrollTop=viewport.top;
+      const page=currentPage();
+      const k=scale();
+      if (page) {
+        page.scrollX=scroller.scrollLeft/Math.max(.001,k);
+        page.scrollY=scroller.scrollTop/Math.max(.001,k);
+      }
+    }
+    syncSelectionPresence({lasso:null});
   }
 
   function copyPayload() {
@@ -789,13 +824,21 @@
     ];
     if (collab && collab.claimObjects && !collab.claimObjects(collabKeys)) return;
     stopEvent(e);
+
     const snapshot=captureSnapshot();
     if (!snapshot) {
       if (collab && collab.releaseObjects) collab.releaseObjects(collabKeys);
       return;
     }
+
     const sessionId='tr-'+uuid();
     const r=resilience(), nb=currentNotebook(), page=currentPage();
+    const scroller=document.getElementById('nbCanvasScroller');
+    const viewport={
+      left:scroller?scroller.scrollLeft:0,
+      top:scroller?scroller.scrollTop:0
+    };
+
     if (r && r.syncSelectionTransform && nb && page) {
       r.syncSelectionTransform(nb.id,page.id,{
         sessionId:sessionId,phase:'start',type:type,
@@ -803,38 +846,64 @@
         bounds:snapshot.bounds
       });
     }
+
     const start={x:e.clientX,y:e.clientY};
     const k=scale();
     const s=stage().getBoundingClientRect();
     const center={x:s.left+snapshot.bounds.cx*k,y:s.top+snapshot.bounds.cy*k};
     const startAngle=Math.atan2(start.y-center.y,start.x-center.x)*180/Math.PI;
     const box=e.currentTarget.closest('.nb-selection-ext-box') || e.currentTarget;
+    let latestTransform=null;
+    let previewFrame=0;
+
+    const computeTransform=ev => {
+      if (type==='move') {
+        return {dx:(ev.clientX-start.x)/k,dy:(ev.clientY-start.y)/k};
+      }
+      if (type==='resize') {
+        const dx=(ev.clientX-start.x)/k,dy=(ev.clientY-start.y)/k;
+        return {factor:clamp(Math.max(
+          (snapshot.bounds.width+dx)/snapshot.bounds.width,
+          (snapshot.bounds.height+dy)/snapshot.bounds.height
+        ),.2,5)};
+      }
+      return {angle:Math.atan2(ev.clientY-center.y,ev.clientX-center.x)*180/Math.PI-startAngle};
+    };
+
+    const applyPreview=transform => {
+      if (!transform) return;
+      applyTransformSnapshot(snapshot,type,transform);
+      refreshCanvasInPlace();
+      // El rectángulo de selección acompaña el contenido sin reconstruir el DOM
+      // mientras el Pencil/dedo está arrastrando.
+      if (type==='move') {
+        box.style.transform='translate('+(transform.dx*k)+'px,'+(transform.dy*k)+'px)';
+      } else if (type==='resize') {
+        box.style.width=(snapshot.bounds.width*k*transform.factor)+'px';
+        box.style.height=(snapshot.bounds.height*k*transform.factor)+'px';
+      } else {
+        box.style.transform='rotate('+transform.angle+'deg)';
+      }
+    };
+
+    const schedulePreview=transform => {
+      latestTransform=transform;
+      if (previewFrame) return;
+      previewFrame=requestAnimationFrame(()=>{
+        previewFrame=0;
+        applyPreview(latestTransform);
+      });
+    };
 
     const move=ev => {
       if (ev.pointerId!==e.pointerId) return;
       if (collab && collab.ownsObjects && !collab.ownsObjects(collabKeys)) return;
       stopEvent(ev);
-      if (type==='move') {
-        const dx=(ev.clientX-start.x)/k, dy=(ev.clientY-start.y)/k;
-        box.style.transform='translate('+(dx*k)+'px,'+(dy*k)+'px)';
-      } else if (type==='resize') {
-        const dx=(ev.clientX-start.x)/k, dy=(ev.clientY-start.y)/k;
-        const f=clamp(Math.max((snapshot.bounds.width+dx)/snapshot.bounds.width,(snapshot.bounds.height+dy)/snapshot.bounds.height),.2,5);
-        box.style.width=(snapshot.bounds.width*k*f)+'px';
-        box.style.height=(snapshot.bounds.height*k*f)+'px';
-      } else {
-        const angle=Math.atan2(ev.clientY-center.y,ev.clientX-center.x)*180/Math.PI-startAngle;
-        box.style.transform='rotate('+angle+'deg)';
-      }
+
+      const transform=computeTransform(ev);
+      schedulePreview(transform);
+
       if (r && r.syncSelectionTransform && nb && page) {
-        let transform;
-        if (type==='move') transform={dx:(ev.clientX-start.x)/k,dy:(ev.clientY-start.y)/k};
-        else if (type==='resize') {
-          const dx=(ev.clientX-start.x)/k,dy=(ev.clientY-start.y)/k;
-          transform={factor:clamp(Math.max((snapshot.bounds.width+dx)/snapshot.bounds.width,(snapshot.bounds.height+dy)/snapshot.bounds.height),.2,5)};
-        } else {
-          transform={angle:Math.atan2(ev.clientY-center.y,ev.clientX-center.x)*180/Math.PI-startAngle};
-        }
         r.syncSelectionTransform(nb.id,page.id,{
           sessionId:sessionId,phase:'move',type:type,transform:transform,
           strokeIds:Array.from(selectedStrokes),imageIds:Array.from(selectedImages),
@@ -849,25 +918,43 @@
       window.removeEventListener('pointermove',move,true);
       window.removeEventListener('pointerup',end,true);
       window.removeEventListener('pointercancel',end,true);
+
+      if (previewFrame) {
+        cancelAnimationFrame(previewFrame);
+        previewFrame=0;
+      }
+
       const stillOwns=!collab || !collab.ownsObjects || collab.ownsObjects(collabKeys);
       if (stillOwns) {
-        if (type==='move') {
-          applyTransformSnapshot(snapshot,'move',{dx:(ev.clientX-start.x)/k,dy:(ev.clientY-start.y)/k});
-        } else if (type==='resize') {
-          const dx=(ev.clientX-start.x)/k,dy=(ev.clientY-start.y)/k;
-          const f=clamp(Math.max((snapshot.bounds.width+dx)/snapshot.bounds.width,(snapshot.bounds.height+dy)/snapshot.bounds.height),.2,5);
-          applyTransformSnapshot(snapshot,'resize',{factor:f});
-        } else {
-          const angle=Math.atan2(ev.clientY-center.y,ev.clientX-center.x)*180/Math.PI-startAngle;
-          applyTransformSnapshot(snapshot,'rotate',{angle});
-        }
-        commitCurrent(type==='move'?'Selección movida':type==='resize'?'Selección redimensionada':'Selección rotada');
+        const finalTransform=computeTransform(ev);
+        applyTransformSnapshot(snapshot,type,finalTransform);
+        refreshCanvasInPlace();
+
+        // Guardamos sin reabrir el editor: reabrirlo era lo que mandaba
+        // el scroll al comienzo de la hoja al soltar la selección.
+        commitTransformInPlace(
+          type==='move'?'Selección movida':type==='resize'?'Selección redimensionada':'Selección rotada',
+          viewport
+        );
+
         if (r && r.syncSelectionTransform && nb && page) {
-          r.syncSelectionTransform(nb.id,page.id,{sessionId:sessionId,phase:'end',type:type});
+          r.syncSelectionTransform(nb.id,page.id,{
+            sessionId:sessionId,phase:'end',type:type,transform:finalTransform,
+            strokeIds:Array.from(selectedStrokes),imageIds:Array.from(selectedImages),
+            bounds:selectionBounds()
+          });
         }
       } else {
-        refreshEditor();
+        // Otro dispositivo ganó el lock: volvemos al snapshot sin saltar de página.
+        applyTransformSnapshot(snapshot,type,type==='move'?{dx:0,dy:0}:type==='resize'?{factor:1}:{angle:0});
+        refreshCanvasInPlace();
+        renderOverlay();
+        if (scroller) {
+          scroller.scrollLeft=viewport.left;
+          scroller.scrollTop=viewport.top;
+        }
       }
+
       if (collab && collab.releaseObjects) collab.releaseObjects(collabKeys);
     };
 
