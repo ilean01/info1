@@ -459,12 +459,18 @@
 
   function renderAll() {
     if (!editorVisible()) return;
+    const now = Date.now();
+    cleanupSessions(now);
+    const hasLaserContent = !!localSession || localGhosts.length > 0 || remoteSessions.size > 0;
+    const existing = document.getElementById('nbLaserLayer');
+    if (!hasLaserContent) {
+      if (existing && existing.childNodes.length) existing.replaceChildren();
+      return;
+    }
     const layers = ensureLayers();
     if (!layers) return;
     const layer = layers.layer;
-    layer.innerHTML = '';
-    const now = Date.now();
-    cleanupSessions(now);
+    layer.replaceChildren();
     const ids = currentIds();
     localGhosts.forEach(s => { if (s.notebookId === ids.notebookId && s.pageId === ids.pageId) renderSession(layer, s, now); });
     if (localSession && localSession.notebookId === ids.notebookId && localSession.pageId === ids.pageId) renderSession(layer, localSession, now);
@@ -644,25 +650,28 @@
     connect();
     ensureUi();
     document.addEventListener('keydown', keyboard, true);
+    document.addEventListener('click', () => {
+      setTimeout(() => {
+        if (!editorVisible()) return;
+        ensureUi();
+        contextChanged();
+      }, 0);
+    }, true);
     window.addEventListener('online', () => { connect(); updateStatus(); });
     window.addEventListener('offline', () => { ready = false; updateStatus(); });
-    window.addEventListener('resize', renderAll, { passive: true });
+    window.addEventListener('resize', () => {
+      if (localSession || localGhosts.length || remoteSessions.size) renderAll();
+    }, { passive: true });
 
-    observer = new MutationObserver(mutations => {
-      const onlyLaser = mutations.length && mutations.every(m => {
-        const t = m.target && m.target.nodeType === 1 ? m.target : null;
-        return !!(t && t.closest && t.closest('#nbLaserLayer,#nbLaserHit,#nbLaserTool,#nbLaserQuick'));
-      });
-      if (!onlyLaser) setTimeout(() => { ensureUi(); contextChanged(); renderAll(); }, 0);
-    });
-    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
-
+    // Keep this deliberately light. Pointer and realtime events repaint immediately;
+    // this timer only discovers a newly opened editor and expires old laser trails.
     tickTimer = setInterval(() => {
       connect();
+      if (!editorVisible()) return;
       ensureUi();
       contextChanged();
-      renderAll();
-    }, 350);
+      if (localSession || localGhosts.length || remoteSessions.size) renderAll();
+    }, 1200);
 
     window.INFO1_NOTEBOOK_LASER = {
       activate: () => setActive(true, false),
