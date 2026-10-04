@@ -3484,7 +3484,7 @@
     pointFlushTimer = setTimeout(function() {
       pointFlushTimer = null;
       flushPoints();
-    }, 32);
+    }, 15);
   }
 
   function flushPoints() {
