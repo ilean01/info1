@@ -3226,7 +3226,8 @@
         stroke: currentDraft
       });
       scheduleShapeHoldSnap();
-      redraw();
+      if (tool === 'line' || tool === 'shape') redraw();
+      else drawStroke(currentDraft);
       e.preventDefault();
     };
 
@@ -3371,18 +3372,21 @@
         pageFinish.redoStack = [];
         pageFinish.strokes.push(currentDraft);
         nbFinish.updatedAt = new Date().toISOString();
-        persist();
         broadcast('stroke-final', {
           notebookId: nbFinish.id,
           pageId: pageFinish.id,
           stroke: currentDraft
         });
+        clearTimeout(inkPersistTimer);
+        inkPersistTimer = setTimeout(persist, 450);
+        clearTimeout(inkRefreshTimer);
+        inkRefreshTimer = setTimeout(function() {
+          refreshPageManagerPreviews();
+          renderNotebookList();
+        }, 700);
       }
       currentDraft = null;
       drawPointerId = null;
-      redraw();
-      refreshPageManagerPreviews();
-      renderNotebookList();
       if (e) e.preventDefault();
     };
 
