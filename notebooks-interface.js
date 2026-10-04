@@ -5,6 +5,8 @@
   const DOCK_ID='nbWritingDock';
   const ADVANCED_KEY='info1-notebook-advanced-toolbar-v1';
   const GESTURE_KEY='info1-notebook-page-gestures-v1';
+  const FULLSCREEN_CLASS='nb-pizarra-fullscreen';
+  const FULLSCREEN_BODY_CLASS='nb-pizarra-fullscreen-lock';
 
   let observer=null;
   let viewportBound=false;
@@ -46,6 +48,13 @@
       '@media(max-width:900px){#nbEditorPanel .nb-editor-top{top:calc(env(safe-area-inset-top,0px) + 4px);padding:7px 9px}.nb-editor-top #nbBack{display:none}.nb-editor-top .nb-actions{display:none}.nb-writing-dock{top:calc(env(safe-area-inset-top,0px) + 64px);grid-template-columns:auto 1fr auto;gap:6px;padding:7px}.nb-q-library .txt{display:none}.nb-q-library{padding:0;min-width:48px}.nb-q-title strong{font-size:14px}.nb-writing-dock-tools{justify-content:flex-start;overflow:visible}.nb-qtool .txt{display:none}.nb-qwidth{display:none}.nb-qtool,.nb-qaction{min-width:46px}.nb-writing-dock-more .nb-qaction[data-qaction="undo"],.nb-writing-dock-more .nb-qaction[data-qaction="redo"]{display:none}}' +
       '@media(max-width:640px){.nb-writing-dock{grid-template-columns:auto minmax(0,1fr);grid-template-areas:"lib title" "tools tools";top:calc(env(safe-area-inset-top,0px) + 58px)}.nb-writing-dock-main{grid-area:lib}.nb-q-title{grid-area:title}.nb-writing-dock-tools{grid-area:tools;justify-content:space-between}.nb-writing-dock-more{display:none}.nb-writing-dock-tools .nb-qcolor{width:42px;height:42px}.nb-qtool{min-width:43px;min-height:43px}.nb-edge-page-zone{width:34px;opacity:.28}}' +
       '@media(max-height:620px){.nb-writing-dock{position:relative;top:auto}#nbEditorPanel .nb-editor-top{position:relative;top:auto}}';
+    style.textContent +=
+      'body.'+FULLSCREEN_BODY_CLASS+'{overflow:hidden!important}' +
+      '#nbEditorPanel.'+FULLSCREEN_CLASS+'{position:fixed!important;inset:0!important;z-index:2147483000!important;width:100vw!important;height:100dvh!important;max-width:none!important;margin:0!important;padding:10px!important;overflow:auto!important;background:radial-gradient(circle at top,#16264b 0,#0b1327 34%,#080e1b 100%)!important;overscroll-behavior:contain}' +
+      '#nbEditorPanel:fullscreen,#nbEditorPanel:-webkit-full-screen{width:100vw!important;height:100vh!important;max-width:none!important;margin:0!important;padding:10px!important;overflow:auto!important;background:radial-gradient(circle at top,#16264b 0,#0b1327 34%,#080e1b 100%)!important}' +
+      '#nbEditorPanel.'+FULLSCREEN_CLASS+' .nb-editor-top,#nbEditorPanel:fullscreen .nb-editor-top,#nbEditorPanel:-webkit-full-screen .nb-editor-top{top:calc(env(safe-area-inset-top,0px) + 4px)!important}' +
+      '#nbEditorPanel.'+FULLSCREEN_CLASS+' .nb-writing-dock,#nbEditorPanel:fullscreen .nb-writing-dock,#nbEditorPanel:-webkit-full-screen .nb-writing-dock{top:calc(env(safe-area-inset-top,0px) + 64px)!important}' +
+      '.nb-q-fullscreen.active{background:#2458a6!important;border-color:#8bb7ff!important;box-shadow:0 0 0 2px #5791f433!important}';
     document.head.appendChild(style);
   }
 
@@ -75,6 +84,74 @@
     setTimeout(syncDockState,0);
   }
 
+  function nativeFullscreenElement(){
+    return document.fullscreenElement||document.webkitFullscreenElement||null;
+  }
+
+  function fullscreenPanel(){
+    return document.getElementById('nbEditorPanel');
+  }
+
+  function fullscreenActive(){
+    const panel=fullscreenPanel();
+    return !!panel&&(nativeFullscreenElement()===panel||panel.classList.contains(FULLSCREEN_CLASS));
+  }
+
+  function setPseudoFullscreen(on){
+    const panel=fullscreenPanel();
+    if(!panel)return;
+    panel.classList.toggle(FULLSCREEN_CLASS,!!on);
+    document.body.classList.toggle(FULLSCREEN_BODY_CLASS,!!on);
+    syncFullscreenButton();
+    setTimeout(()=>{adjustPagerForKeyboard();window.dispatchEvent(new Event('resize'));},50);
+  }
+
+  async function exitFullscreenMode(){
+    const panel=fullscreenPanel();
+    try{
+      if(nativeFullscreenElement()){
+        const exit=document.exitFullscreen||document.webkitExitFullscreen;
+        if(exit)await Promise.resolve(exit.call(document));
+      }
+    }catch(_){}
+    if(panel)panel.classList.remove(FULLSCREEN_CLASS);
+    document.body.classList.remove(FULLSCREEN_BODY_CLASS);
+    syncFullscreenButton();
+    setTimeout(()=>{adjustPagerForKeyboard();window.dispatchEvent(new Event('resize'));},50);
+  }
+
+  async function toggleFullscreen(){
+    const panel=fullscreenPanel();
+    if(!panel)return;
+    if(fullscreenActive()){
+      await exitFullscreenMode();
+      return;
+    }
+    panel.classList.remove(FULLSCREEN_CLASS);
+    document.body.classList.remove(FULLSCREEN_BODY_CLASS);
+    const request=panel.requestFullscreen||panel.webkitRequestFullscreen;
+    if(request){
+      try{
+        await Promise.resolve(request.call(panel));
+        syncFullscreenButton();
+        setTimeout(()=>{adjustPagerForKeyboard();window.dispatchEvent(new Event('resize'));},50);
+        return;
+      }catch(_){}
+    }
+    setPseudoFullscreen(true);
+  }
+
+  function syncFullscreenButton(){
+    const btn=document.querySelector('#'+DOCK_ID+' [data-qaction="fullscreen"]');
+    if(!btn)return;
+    const on=fullscreenActive();
+    btn.classList.toggle('active',on);
+    btn.title=on?'Salir de pantalla completa':'Pizarra en pantalla completa';
+    btn.innerHTML=on
+      ? '<span class="ico">🗗</span><span class="txt">Salir</span>'
+      : '<span class="ico">⛶</span><span class="txt">Pantalla</span>';
+  }
+
   function buildDock(){
     const panel=document.getElementById('nbEditorPanel');
     const top=panel&&panel.querySelector('.nb-editor-top');
@@ -88,6 +165,7 @@
     dock.innerHTML=
       '<div class="nb-writing-dock-main">'+
         '<button class="nb-qaction nb-q-library" data-qaction="library" type="button" title="Volver a la biblioteca"><span class="ico">📚</span><span class="txt">Biblioteca</span></button>'+
+        '<button class="nb-qaction nb-q-fullscreen" data-qaction="fullscreen" type="button" title="Pizarra en pantalla completa"><span class="ico">⛶</span><span class="txt">Pantalla</span></button>'+
       '</div>'+
       '<div class="nb-q-title"><strong>'+esc(editorTitle())+'</strong><span>'+esc(pageText()+(folderText()?' · '+folderText():''))+'</span></div>'+
       '<div class="nb-writing-dock-tools">'+
@@ -104,7 +182,11 @@
       '<div class="nb-writing-dock-more"></div>';
     top.insertAdjacentElement('afterend',dock);
 
-    dock.querySelector('[data-qaction="library"]').onclick=()=>proxyClick('nbBack');
+    dock.querySelector('[data-qaction="library"]').onclick=async()=>{
+      if(fullscreenActive())await exitFullscreenMode();
+      proxyClick('nbBack');
+    };
+    dock.querySelector('[data-qaction="fullscreen"]').onclick=()=>toggleFullscreen();
     dock.querySelector('[data-qtool="pen"]').onclick=()=>proxyClick('nbPen');
     dock.querySelector('[data-qtool="highlighter"]').onclick=()=>proxyClick('nbHighlighter');
     dock.querySelector('[data-qtool="eraser"]').onclick=()=>proxyClick('nbEraser');
@@ -179,6 +261,7 @@
     const more=dock.querySelector('[data-qaction="more"]');
     const bar=document.querySelector('#nbEditorPanel .nb-toolbar');
     if(more&&bar)more.classList.toggle('active',!bar.classList.contains('nb-advanced-hidden'));
+    syncFullscreenButton();
   }
 
   function ensurePageZones(){
@@ -320,6 +403,8 @@
     installStyles();
     bindViewport();
     bindKeyboardNavigation();
+    document.addEventListener('fullscreenchange',()=>{syncFullscreenButton();setTimeout(adjustPagerForKeyboard,30);});
+    document.addEventListener('webkitfullscreenchange',()=>{syncFullscreenButton();setTimeout(adjustPagerForKeyboard,30);});
     observer=new MutationObserver(mutations=>{
       const relevant=mutations.some(m=>{
         const t=m.target&&m.target.nodeType===1?m.target:null;
@@ -339,6 +424,9 @@
       previousPage:()=>changePage(-1),
       nextPage:()=>changePage(1),
       toggleAdvanced,
+      toggleFullscreen,
+      exitFullscreen:exitFullscreenMode,
+      get fullscreen(){return fullscreenActive();},
       setGestures:enabled=>localStorage.setItem(GESTURE_KEY,enabled?'1':'0')
     };
   }
