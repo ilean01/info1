@@ -30,6 +30,11 @@
       #info1CloudBadge.info1-settings-open{display:block!important;position:fixed!important;top:86px!important;right:22px!important;bottom:auto!important;z-index:10002!important;width:min(620px,calc(100vw - 32px))!important;max-width:min(620px,calc(100vw - 32px))!important;padding:18px!important;border-radius:18px!important;box-shadow:0 24px 80px #000a!important}
       #info1CloudBadge.info1-settings-open>span{display:block;margin:0 0 10px;font-size:14px;line-height:1.45}
       #info1CloudBadge.info1-settings-open button{margin:6px 6px 0 0!important}
+      #info1WorkspaceCodeBox{margin:12px 0 4px;padding:12px;border:1px solid #334a70;border-radius:14px;background:#081329}
+      #info1WorkspaceCodeBox .ws-label{font-size:11px;font-weight:900;letter-spacing:.05em;text-transform:uppercase;color:#93a7c8;margin-bottom:6px}
+      #info1WorkspaceCodeBox .ws-code{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+      #info1WorkspaceCodeBox code{display:block;flex:1;min-width:220px;padding:9px 10px;border-radius:10px;background:#020617;color:#dbeafe;border:1px solid #223657;font:800 12px/1.35 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;word-break:break-all}
+      #info1WorkspaceCodeBox .ws-help{margin-top:7px;color:#a9b8d2;font-size:12px;line-height:1.35}
       #info1CloudSettingsBackdrop{position:fixed;inset:0;z-index:10001;background:#02061788;backdrop-filter:blur(4px);display:none}
       #info1CloudSettingsBackdrop.open{display:block}
       #info1CloudSettingsBtn{border:1px solid #334a70;background:#101b34;color:#eef4ff;border-radius:12px;padding:9px 12px;font-weight:850;cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:7px}
@@ -253,6 +258,57 @@
     }
   }
 
+  async function copyText(value) {
+    const text = String(value || '').trim();
+    if (!text) return false;
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {}
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove();
+      return !!ok;
+    } catch { return false; }
+  }
+
+  function ensureWorkspaceCodeBox() {
+    const badge = document.getElementById('info1CloudBadge');
+    if (!badge) return;
+    const status = window.INFO1_CLOUD?.status || {};
+    const ctx = parse(localStorage.getItem(CLOUD_CTX_KEY), {}) || {};
+    const workspaceId = status.workspaceId || ctx.workspaceId || '';
+
+    let box = badge.querySelector('#info1WorkspaceCodeBox');
+    if (!workspaceId) {
+      box?.remove();
+      return;
+    }
+
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'info1WorkspaceCodeBox';
+      badge.querySelector('span')?.after(box);
+    }
+
+    box.innerHTML =
+      '<div class="ws-label">Código de tu espacio INFO 1</div>'+
+      '<div class="ws-code"><code id="info1WorkspaceCodeValue">'+esc(workspaceId)+'</code>'+
+      '<button id="info1CopyWorkspaceCode" type="button">📋 Copiar código</button></div>'+
+      '<div class="ws-help">Compartile este código a Elías. Él debe iniciar sesión con su propia cuenta → Configurar espacio → pegar el código → Unirme.</div>';
+
+    const copy = box.querySelector('#info1CopyWorkspaceCode');
+    if (copy) copy.onclick = async e => {
+      e.preventDefault(); e.stopPropagation();
+      const ok = await copyText(workspaceId);
+      copy.textContent = ok ? '✅ Copiado' : 'Seleccioná y copiá el código';
+      if (ok) setTimeout(() => { copy.textContent = '📋 Copiar código'; }, 1400);
+    };
+  }
+
   function ensureCompareButton() {
     const badge = document.getElementById('info1CloudBadge');
     if (!badge) return;
@@ -271,8 +327,8 @@
   function boot() {
     injectStyles(); ensureButton(); closePanel();
     if (syncTimer) clearInterval(syncTimer);
-    syncTimer = setInterval(() => { ensureButton(); updateButtonState(); ensureCompareButton(); }, 900);
-    setTimeout(ensureCompareButton, 450);
+    syncTimer = setInterval(() => { ensureButton(); updateButtonState(); ensureWorkspaceCodeBox(); ensureCompareButton(); }, 900);
+    setTimeout(() => { ensureWorkspaceCodeBox(); ensureCompareButton(); }, 450);
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, {once:true}); else boot();
