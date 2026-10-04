@@ -15,6 +15,7 @@
   let channelClient=null;
   let channelName=null;
   let ready=false;
+  let connecting=false;
   let lastPresenceKey='';
   let lastCursorAt=0;
   let remoteCursors=new Map();
@@ -118,22 +119,22 @@
   function topic(workspaceId){ return 'info1-notebook-collab-'+CHANNEL_VERSION+'-'+workspaceId; }
 
   function disconnect(){
-    const c=cloud();
     if(channel&&channelClient){try{channelClient.removeChannel(channel);}catch(_){}}
-    channel=null;channelName=null;ready=false;
+    channel=null;channelName=null;channelClient=null;ready=false;connecting=false;
     remoteCursors.clear();remoteLocks.clear();localLocks.clear();
-    renderPeople();renderCursors();renderLocks();
+    renderPeople();renderGlobalActivity();renderCursors();renderLocks();
   }
 
   function connect(){
     const c=cloud();
     if(!c.connected||!c.workspaceId||!c.client||!navigator.onLine){ if(channel) disconnect(); return; }
     const wanted=topic(c.workspaceId);
-    if(channel&&channelClient===c.client&&channelName===wanted) return;
+    if(channel&&channelClient===c.client&&channelName===wanted&&(ready||connecting)) return;
     disconnect();
     channelName=wanted;
     channelClient=c.client;
-    channel=c.client.channel(wanted,{
+    connecting=true;
+    const thisChannel=c.client.channel(wanted,{
       config:{
         presence:{key:deviceId()},
         broadcast:{self:false,ack:false}
@@ -142,15 +143,26 @@
       .on('presence',{event:'sync'},()=>{renderPeople();renderGlobalActivity();})
       .on('presence',{event:'join'},()=>{renderPeople();renderGlobalActivity();})
       .on('presence',{event:'leave'},()=>{renderPeople();renderGlobalActivity();})
-      .on('broadcast',{event:'collab'},msg=>handleMessage(msg&&msg.payload?msg.payload:{}))
-      .subscribe(async status=>{
-        ready=status==='SUBSCRIBED';
-        if(ready){
-          try{await channel.track(presencePayload());}catch(_){}
-          lastPresenceKey='';
-          renderPeople();
-        }
-      });
+      .on('broadcast',{event:'collab'},msg=>handleMessage(msg&&msg.payload?msg.payload:{}));
+    channel=thisChannel;
+    thisChannel.subscribe(async status=>{
+      if(channel!==thisChannel)return;
+      ready=status==='SUBSCRIBED';
+      if(ready){
+        connecting=false;
+        try{await thisChannel.track(presencePayload());}catch(_){}
+        lastPresenceKey='';
+        renderPeople();renderGlobalActivity();
+        return;
+      }
+      if(status==='CHANNEL_ERROR'||status==='TIMED_OUT'||status==='CLOSED'){
+        ready=false;connecting=false;
+        try{c.client.removeChannel(thisChannel);}catch(_){}
+        if(channel===thisChannel){channel=null;channelName=null;channelClient=null;}
+        renderPeople();renderGlobalActivity();
+        setTimeout(connect,650);
+      }
+    });
   }
 
   function send(kind,payload){
@@ -352,7 +364,9 @@
     if(!stage||stage.dataset.collabCursorBound==='1') return;
     stage.dataset.collabCursorBound='1';
     stage.addEventListener('pointermove',e=>{
-      if(Date.now()-lastCursorAt<36)return;
+      const a=api();
+      if(a&&a.isDrawing)return;
+      if(Date.now()-lastCursorAt<48)return;
       lastCursorAt=Date.now();
       const r=stage.getBoundingClientRect(),k=Math.max(.001,r.width/LOGICAL_WIDTH),ids=currentIds();
       if(!ids.notebookId||!ids.pageId)return;
