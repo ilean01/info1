@@ -3490,15 +3490,20 @@
     btn.textContent = followMode ? '👀 Siguiendo otra pantalla' : '👀 Seguir otra pantalla';
   }
 
-  function toggleFollow() {
-    followMode = !followMode;
+  function setFollowMode(enabled) {
+    followMode = !!enabled;
     localStorage.setItem(FOLLOW_KEY, followMode ? '1' : '0');
     updateFollowButton();
-    flashStatus(followMode ? '👀 Modo seguir activado' : '✍️ Modo seguir desactivado');
+    flashStatus(followMode ? '👀 Siguiendo la pizarra compartida en vivo' : '✍️ Dejaste de seguir la otra pantalla');
     if (followMode && currentNotebookId) {
       readOnly = true;
       renderEditor();
     }
+    return followMode;
+  }
+
+  function toggleFollow() {
+    setFollowMode(!followMode);
   }
 
   function flashStatus(text) {
@@ -4008,6 +4013,17 @@
     connectRealtime();
     setInterval(connectRealtime, 1200);
     setInterval(updateCloudStatus, 1200);
+    window.addEventListener('info1:workspace-changed', function() {
+      if (channel && channelClient) {
+        try { channelClient.removeChannel(channel); } catch (_) {}
+      }
+      channel = null;
+      channelName = null;
+      channelClient = null;
+      channelReady = false;
+      remoteDrafts.clear();
+      setTimeout(connectRealtime, 120);
+    });
     openFromHash();
     window.addEventListener('hashchange', openFromHash);
     window.addEventListener('info1:remote-state-applied', function() {
@@ -4078,6 +4094,7 @@
       list: function() { return ensureStore().order.map(function(id) { return ensureStore().notebooks[id]; }).filter(Boolean); },
       get current() { return currentNotebookId; },
       get isDrawing() { return !!currentDraft; },
+      setFollow: setFollowMode,
       get follow() { return followMode; }
     };
   }
