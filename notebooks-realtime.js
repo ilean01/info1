@@ -54,8 +54,10 @@
   let drawPointerId = null;
   let shapeHoldTimer = null;
   let scrollPersistTimer = null;
+  let focusBroadcastTimer = null;
   let pencilDetected = false;
   let redrawFrame = 0;
+  let lastViewportPaintY = null;
   let lastRenderStats = { drawn: 0, skipped: 0, backingScale: 1 };
   let viewportResizeTimer = null;
   let viewportCleanup = null;
@@ -2805,13 +2807,21 @@
     });
   }
 
+  function sendFocusSoon(delay) {
+    if (focusBroadcastTimer) return;
+    focusBroadcastTimer = setTimeout(function() {
+      focusBroadcastTimer = null;
+      sendFocus();
+    }, Math.max(35, Number(delay) || 70));
+  }
+
   function persistViewportSoon(page) {
     clearTimeout(scrollPersistTimer);
     scrollPersistTimer = setTimeout(function() {
       if (!page) return;
       persist();
       sendFocus();
-    }, 260);
+    }, 320);
   }
 
   function growPage(page, amount) {
@@ -2850,7 +2860,35 @@
       scroller.scrollTop = Math.max(0, logicalY * newScale - ay);
       page.scrollX = scroller.scrollLeft / Math.max(0.001, newScale);
       page.scrollY = scroller.scrollTop / Math.max(0.001, newScale);
+      sendFocus();
       persistViewportSoon(page);
+    });
+  }
+
+  function previewPinchZoom(page, nextZoom, gesture) {
+    const stage = document.getElementById('nbCanvasStage');
+    const label = document.getElementById('nbZoomLabel');
+    if (!page || !stage || !gesture) return;
+    const zoom = clamp(Number(nextZoom) || 1, MIN_ZOOM, MAX_ZOOM);
+    gesture.pendingZoom = zoom;
+    const ratio = zoom / Math.max(0.001, gesture.startZoom || 1);
+    stage.style.willChange = 'transform';
+    stage.style.transformOrigin = (gesture.stageOriginX || 0) + 'px ' + (gesture.stageOriginY || 0) + 'px';
+    stage.style.transform = 'scale(' + ratio + ')';
+    if (label) label.textContent = Math.round(zoom * 100) + '%';
+  }
+
+  function commitPinchZoom(page, gesture) {
+    const stage = document.getElementById('nbCanvasStage');
+    if (stage) {
+      stage.style.transform = '';
+      stage.style.transformOrigin = '0 0';
+      stage.style.willChange = '';
+    }
+    if (!page || !gesture) return;
+    setPageZoom(page, gesture.pendingZoom || gesture.startZoom || page.zoom || 1, {
+      x: gesture.anchorX,
+      y: gesture.anchorY
     });
   }
 
@@ -3022,13 +3060,11 @@
     };
     if (viewport) {
       viewport.addEventListener('resize', onViewportResize, { passive:true });
-      viewport.addEventListener('scroll', onViewportResize, { passive:true });
     }
     window.addEventListener('orientationchange', onViewportResize, { passive:true });
     viewportCleanup = function() {
       if (viewport) {
         viewport.removeEventListener('resize', onViewportResize);
-        viewport.removeEventListener('scroll', onViewportResize);
       }
       window.removeEventListener('orientationchange', onViewportResize);
     };
@@ -3039,7 +3075,8 @@
       const scale = currentCanvasScale();
       p.scrollY = scroller.scrollTop / Math.max(0.001, scale);
       p.scrollX = scroller.scrollLeft / Math.max(0.001, scale);
-      requestRedraw();
+      if (lastViewportPaintY === null || Math.abs(p.scrollY - lastViewportPaintY) > 150) requestRedraw();
+      sendFocusSoon(60);
       if (scroller.scrollTop + scroller.clientHeight > scroller.scrollHeight - 260) {
         growPage(p, PAGE_GROW_BY);
       } else {
@@ -3082,15 +3119,23 @@
         const pair = pointerPair();
         const dx = pair[1].x - pair[0].x;
         const dy = pair[1].y - pair[0].y;
-        const centerX = (pair[0].x + pair[1].x) / 2 - scroller.getBoundingClientRect().left;
-        const centerY = (pair[0].y + pair[1].y) / 2 - scroller.getBoundingClientRect().top;
+        const centerClientX = (pair[0].x + pair[1].x) / 2;
+        const centerClientY = (pair[0].y + pair[1].y) / 2;
+        const scrollerRect = scroller.getBoundingClientRect();
+        const stage = document.getElementById('nbCanvasStage');
+        const stageRect = stage ? stage.getBoundingClientRect() : scrollerRect;
+        const centerX = centerClientX - scrollerRect.left;
+        const centerY = centerClientY - scrollerRect.top;
         const p = getPage(getNotebook(currentNotebookId), currentPageId);
         gestureState = {
           type: 'pinch',
           startDistance: Math.max(10, Math.hypot(dx,dy)),
           startZoom: p ? p.zoom : 1,
+          pendingZoom: p ? p.zoom : 1,
           anchorX: centerX,
-          anchorY: centerY
+          anchorY: centerY,
+          stageOriginX: centerClientX - stageRect.left,
+          stageOriginY: centerClientY - stageRect.top
         };
       } else {
         gestureState = {
@@ -3194,11 +3239,19 @@
             const p = getPage(getNotebook(currentNotebookId), currentPageId);
             if (p && gestureState && gestureState.startDistance) {
               const nextZoom = gestureState.startZoom * dist / gestureState.startDistance;
-              setPageZoom(p, nextZoom, { x:gestureState.anchorX, y:gestureState.anchorY });
+              previewPinchZoom(p, nextZoom, gestureState);
             }
           } else if (gestureState.type === 'pan' && gestureState.pointerId === e.pointerId) {
-            scroller.scrollLeft = gestureState.startScrollLeft - (e.clientX - gestureState.startX);
-            scroller.scrollTop = gestureState.startScrollTop - (e.clientY - gestureState.startY);
+            gestureState.pendingX = e.clientX;
+            gestureState.pendingY = e.clientY;
+            if (!gestureState.panFrame) {
+              const g = gestureState;
+              g.panFrame = requestAnimationFrame(function() {
+                g.panFrame = 0;
+                scroller.scrollLeft = g.startScrollLeft - ((g.pendingX ?? g.startX) - g.startX);
+                scroller.scrollTop = g.startScrollTop - ((g.pendingY ?? g.startY) - g.startY);
+              });
+            }
           }
           e.preventDefault();
           return;
@@ -3266,6 +3319,10 @@
 
     const finish = function(e) {
       if (e.pointerType === 'touch' && activePointers.has(e.pointerId)) {
+        if (gestureState && gestureState.type === 'pinch') {
+          const pinchPage = getPage(getNotebook(currentNotebookId), currentPageId);
+          commitPinchZoom(pinchPage, gestureState);
+        }
         activePointers.delete(e.pointerId);
         if (activePointers.size >= 2) {
           beginTouchGesture(e);
@@ -3492,6 +3549,8 @@
     if (currentDraft) drawStroke(currentDraft);
     lastRenderStats.drawn = drawn;
     lastRenderStats.skipped = skipped;
+    const scroller = document.getElementById('nbCanvasScroller');
+    if (scroller) lastViewportPaintY = scroller.scrollTop / Math.max(0.001, currentCanvasScale());
   }
 
   function schedulePointFlush() {
@@ -3700,8 +3759,13 @@
       if (followMode && store.notebooks[m.notebookId]) {
         const remoteNb = store.notebooks[m.notebookId];
         const remotePage = getPage(remoteNb, m.pageId);
+        let zoomChanged = false;
         if (remotePage) {
-          if (Number.isFinite(Number(m.zoom))) remotePage.zoom = clamp(Number(m.zoom), MIN_ZOOM, MAX_ZOOM);
+          if (Number.isFinite(Number(m.zoom))) {
+            const nextZoom = clamp(Number(m.zoom), MIN_ZOOM, MAX_ZOOM);
+            zoomChanged = Math.abs((Number(remotePage.zoom) || 1) - nextZoom) > 0.002;
+            remotePage.zoom = nextZoom;
+          }
           if (Number.isFinite(Number(m.scrollY))) remotePage.scrollY = Math.max(0, Number(m.scrollY));
           if (Number.isFinite(Number(m.scrollX))) remotePage.scrollX = Math.max(0, Number(m.scrollX));
         }
@@ -3710,10 +3774,18 @@
         } else {
           readOnly = true;
           if (remotePage) {
-            applyCanvasGeometry(remotePage);
-            restorePageViewport(remotePage);
-            renderPages();
-            redraw();
+            if (zoomChanged) {
+              applyCanvasGeometry(remotePage);
+              redraw();
+            }
+            const scroller = document.getElementById('nbCanvasScroller');
+            if (scroller) {
+              requestAnimationFrame(function() {
+                const scale = currentCanvasScale();
+                scroller.scrollTop = Math.max(0, Number(remotePage.scrollY || 0) * scale);
+                scroller.scrollLeft = Math.max(0, Number(remotePage.scrollX || 0) * scale);
+              });
+            }
           }
         }
       } else if (currentNotebookId === m.notebookId && m.pageId && currentPageId !== m.pageId && readOnly) {
