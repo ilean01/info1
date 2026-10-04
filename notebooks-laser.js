@@ -100,7 +100,8 @@
   }
 
   function autoReturn() {
-    return localStorage.getItem(RETURN_KEY) !== '0';
+    // Compatibilidad con diagnósticos antiguos: el láser ahora es siempre persistente.
+    return false;
   }
 
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
@@ -288,7 +289,8 @@
       pointerId = null;
       renderAll();
       try { hit.releasePointerCapture(e.pointerId); } catch (_) {}
-      if (autoReturn()) setActive(false, true);
+      // El láser queda activo para el siguiente gesto. Solo cambia al elegir Lápiz
+      // (o al desactivarlo explícitamente con L/Escape).
       e.preventDefault();
       e.stopPropagation();
     };
@@ -513,7 +515,7 @@
       btn.id = 'nbLaserQuick';
       btn.type = 'button';
       btn.className = 'nb-qtool nb-laser-quick';
-      btn.title = 'Láser · atajo L';
+      btn.title = 'Láser persistente · queda activo hasta elegir Lápiz · atajo L';
       btn.innerHTML = '<span class="ico">🔴</span><span class="txt">Láser</span>';
       const lasso = tools.querySelector('[data-qtool="lasso"]');
       if (lasso && lasso.nextSibling) tools.insertBefore(btn, lasso.nextSibling);
@@ -531,7 +533,7 @@
     btn.id = 'nbLaserTool';
     btn.type = 'button';
     btn.textContent = '🔴 Láser';
-    btn.title = 'Activar/desactivar láser (L)';
+    btn.title = 'Láser persistente · queda activo hasta elegir Lápiz (L)';
     btn.onclick = () => setActive(!active, active);
 
     const wrap = document.createElement('span');
@@ -541,7 +543,7 @@
       '<input id="nbLaserColor" type="color" aria-label="Color del láser">' +
       '<label class="small nb-laser-long">Trazo <input id="nbLaserWidth" type="range" min="2" max="24" step="1"></label>' +
       '<label class="small nb-laser-long">Punto <input id="nbLaserPoint" type="range" min="8" max="72" step="1"></label>' +
-      '<label class="small nb-laser-long"><input id="nbLaserReturn" type="checkbox"> volver al lápiz</label>' +
+      '<span class="small nb-laser-long">Permanece activo hasta elegir ✏️ Lápiz</span>' +
       '<span id="nbLaserStatus" class="nb-laser-status">Láser local</span>';
 
     const modeBtn = document.getElementById('nbMode');
@@ -554,17 +556,14 @@
     const color = document.getElementById('nbLaserColor');
     const width = document.getElementById('nbLaserWidth');
     const point = document.getElementById('nbLaserPoint');
-    const ret = document.getElementById('nbLaserReturn');
     mode.value = settingMode();
     color.value = settingColor();
     width.value = String(settingWidth());
     point.value = String(settingPoint());
-    ret.checked = autoReturn();
     mode.onchange = () => localStorage.setItem(MODE_KEY, mode.value === 'trail' ? 'trail' : 'point');
     color.oninput = () => localStorage.setItem(COLOR_KEY, color.value);
     width.oninput = () => localStorage.setItem(WIDTH_KEY, String(clamp(Number(width.value) || 7, 2, 24)));
     point.oninput = () => localStorage.setItem(POINT_KEY, String(clamp(Number(point.value) || 22, 8, 72)));
-    ret.onchange = () => localStorage.setItem(RETURN_KEY, ret.checked ? '1' : '0');
   }
 
   function updateStatus() {
@@ -573,12 +572,12 @@
     status.classList.remove('ready', 'offline');
     if (!navigator.onLine) {
       status.classList.add('offline');
-      status.textContent = 'Láser · sin conexión';
+      status.textContent = active ? '🔴 Láser activo · sin conexión' : 'Láser · sin conexión';
     } else if (ready) {
       status.classList.add('ready');
-      status.textContent = 'Láser · tiempo real';
+      status.textContent = active ? '🔴 Láser activo · tiempo real' : 'Láser · tiempo real';
     } else {
-      status.textContent = 'Láser · local / conectando';
+      status.textContent = active ? '🔴 Láser activo · local / conectando' : 'Láser · local / conectando';
     }
   }
 
@@ -625,7 +624,8 @@
       send('laser-end', compactSession(localSession, []));
       localSession = null;
       pointerId = null;
-      setActive(false, true);
+      // Al cambiar de página el modo láser se conserva.
+      syncControls();
     }
   }
 
@@ -652,7 +652,12 @@
     connect();
     ensureUi();
     document.addEventListener('keydown', keyboard, true);
-    document.addEventListener('click', () => {
+    document.addEventListener('click', e => {
+      const target=e.target&&e.target.closest?e.target.closest('#nbPen,[data-qtool="pen"]'):null;
+      if(target&&active){
+        // Elegir Lápiz es la acción explícita que termina el modo láser.
+        setActive(false,false);
+      }
       setTimeout(() => {
         if (!editorVisible()) return;
         ensureUi();
