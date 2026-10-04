@@ -4030,6 +4030,10 @@
         currentPage: function() { return getPage(getNotebook(currentNotebookId), currentPageId); },
         mediaAssets: function() { return ensureStore().mediaAssets; },
         currentNotebook: function() { return getNotebook(currentNotebookId); },
+        refreshCanvas: function() {
+          renderImageLayer();
+          requestRedraw();
+        },
         refresh: function() {
           renderImageLayer();
           redraw();
