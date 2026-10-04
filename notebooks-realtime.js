@@ -27,6 +27,7 @@
   let channelName = null;
   let channelClient = null;
   let channelReady = false;
+  let channelConnecting = false;
   let currentDraft = null;
   let pointQueue = [];
   let pointFlushTimer = null;
@@ -3200,6 +3201,7 @@
       const activePage = getPage(getNotebook(currentNotebookId), currentPageId);
       maybeGrowPage(activePage, p.y);
 
+      let forceFullRedraw = false;
       if (currentDraft.snappedByHold && ['pen','highlighter'].includes(currentDraft.tool)) {
         const a=currentDraft._shapeSnapAnchor||currentDraft._shapeHoldAnchor;
         const movedAfterSnap=a?Math.hypot(p.x*LOGICAL_WIDTH-a.x,p.y-a.y):999;
@@ -3212,6 +3214,7 @@
         currentDraft.snappedByHold = false;
         currentDraft._shapeHoldAnchor={x:p.x*LOGICAL_WIDTH,y:p.y};
         currentDraft._shapeSnapAnchor=null;
+        forceFullRedraw = true;
       }
 
       if (currentDraft.tool === 'line' || currentDraft.tool === 'shape') {
@@ -3221,6 +3224,7 @@
         delete currentDraft._bounds;
         currentDraft._boundsVersion = 0;
       } else {
+        const previousCount = currentDraft.points.length;
         const coalesced = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
         const rawEvents = coalesced.length ? coalesced : [e];
         let added = false;
@@ -3238,8 +3242,10 @@
         currentDraft._boundsVersion = 0;
         schedulePointFlush();
         scheduleShapeHoldSnap();
+        if (forceFullRedraw) requestRedraw();
+        else drawStrokeIncremental(currentDraft, previousCount);
       }
-      requestRedraw();
+      if (currentDraft.tool === 'line' || currentDraft.tool === 'shape') requestRedraw();
       e.preventDefault();
     };
 
@@ -3434,6 +3440,18 @@
     ctx.restore();
   }
 
+  function drawStrokeIncremental(stroke, fromIndex) {
+    if (!stroke || stroke.shapeType || !Array.isArray(stroke.points) || stroke.points.length < 2) return false;
+    const start = Math.max(0, Math.min(stroke.points.length - 1, Number(fromIndex) || 0) - 1);
+    const pts = stroke.points.slice(start);
+    if (pts.length < 2) return false;
+    const preview = Object.assign({}, stroke, { points: pts });
+    delete preview._bounds;
+    delete preview._boundsVersion;
+    drawStroke(preview);
+    return true;
+  }
+
   function redraw() {
     if (!ctx || !canvas) return;
     ctx.setTransform(1,0,0,1,0,0);
@@ -3466,7 +3484,7 @@
     pointFlushTimer = setTimeout(function() {
       pointFlushTimer = null;
       flushPoints();
-    }, 45);
+    }, 32);
   }
 
   function flushPoints() {
@@ -3533,31 +3551,54 @@
     const sb = window.INFO1_SUPABASE_CLIENT;
     const desired = desiredChannelName();
     if (!sb || !desired) {
-      if (channel && channelClient) channelClient.removeChannel(channel).catch(() => {});
+      if (channel && channelClient) {
+        try { channelClient.removeChannel(channel); } catch (_) {}
+      }
       channel = null; channelName = null; channelClient = null;
       channelReady = false;
+      channelConnecting = false;
       updateCloudStatus();
       return;
     }
-    if (channel && channelClient === sb && channelName === desired) return;
+    if (channel && channelClient === sb && channelName === desired && (channelReady || channelConnecting)) return;
 
     if (channel) {
-      try { channelClient.removeChannel(channel); } catch (_) {}
+      try { channelClient && channelClient.removeChannel(channel); } catch (_) {}
       channel = null;
       channelReady = false;
+      channelConnecting = false;
     }
 
     channelName = desired;
     channelClient = sb;
-    channel = sb.channel(desired, { config: { broadcast: { self: false, ack: false } } })
+    channelConnecting = true;
+    const thisChannel = sb.channel(desired, { config: { broadcast: { self: false, ack: false } } })
       .on('broadcast', { event: 'nb' }, function(msg) {
         handleRemote(msg && msg.payload ? msg.payload : {});
-      })
-      .subscribe(function(status) {
-        channelReady = status === 'SUBSCRIBED';
-        updateCloudStatus();
-        if (channelReady && currentNotebookId) sendFocus();
       });
+    channel = thisChannel;
+    thisChannel.subscribe(function(status) {
+      if (channel !== thisChannel) return;
+      channelReady = status === 'SUBSCRIBED';
+      if (channelReady) {
+        channelConnecting = false;
+        updateCloudStatus();
+        if (currentNotebookId) sendFocus();
+        return;
+      }
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        channelConnecting = false;
+        channelReady = false;
+        try { sb.removeChannel(thisChannel); } catch (_) {}
+        if (channel === thisChannel) {
+          channel = null;
+          channelName = null;
+          channelClient = null;
+        }
+        updateCloudStatus();
+        setTimeout(connectRealtime, 650);
+      }
+    });
   }
 
   function updateCloudStatus() {
@@ -4021,6 +4062,7 @@
       channelName = null;
       channelClient = null;
       channelReady = false;
+      channelConnecting = false;
       remoteDrafts.clear();
       setTimeout(connectRealtime, 120);
     });
