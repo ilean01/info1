@@ -2855,6 +2855,7 @@
     if (path > 24 && direct / Math.max(1, path) > 0.94) {
       return {
         type: 'line',
+        label: 'Línea',
         data: { x1: pts[0].x, y1: pts[0].y, x2: pts[pts.length-1].x, y2: pts[pts.length-1].y }
       };
     }
@@ -2867,18 +2868,64 @@
     });
     const w = maxX - minX;
     const h = maxY - minY;
-    const closed = Math.hypot(last.x-first.x,last.y-first.y) <= Math.max(28, Math.max(w,h)*0.28);
+    const largest = Math.max(w,h);
+    const smallest = Math.min(w,h);
+    const closed = Math.hypot(last.x-first.x,last.y-first.y) <= Math.max(34, largest*0.34);
+
     if (closed && w > 28 && h > 28) {
+      // Rectángulo/cuadrado: buscamos puntos que sigan los cuatro bordes y que
+      // realmente hayan pasado cerca de las cuatro esquinas. Esto evita que un
+      // círculo se confunda con un cuadrado.
+      const edgeTol = Math.max(10, smallest * 0.105);
+      let edgeHits = 0;
+      xy.forEach(function(p) {
+        const edgeDistance = Math.min(
+          Math.abs(p.x-minX), Math.abs(p.x-maxX),
+          Math.abs(p.y-minY), Math.abs(p.y-maxY)
+        );
+        if (edgeDistance <= edgeTol) edgeHits++;
+      });
+      const cornerTol = Math.max(16, smallest * 0.14);
+      const corners = [
+        {x:minX,y:minY},{x:maxX,y:minY},
+        {x:maxX,y:maxY},{x:minX,y:maxY}
+      ];
+      const cornerHits = corners.filter(function(c) {
+        return xy.some(function(p){ return Math.hypot(p.x-c.x,p.y-c.y) <= cornerTol; });
+      }).length;
+      const edgeRatio = edgeHits / Math.max(1,xy.length);
+      const aspect = w / Math.max(1,h);
+      if (cornerHits >= 4 && edgeRatio >= 0.58 && aspect > 0.28 && aspect < 3.6) {
+        const square = aspect > 0.78 && aspect < 1.28;
+        return {
+          type: 'rectangle',
+          label: square ? 'Cuadrado' : 'Rectángulo',
+          data: {
+            x1: minX / LOGICAL_WIDTH,
+            y1: minY,
+            x2: maxX / LOGICAL_WIDTH,
+            y2: maxY
+          }
+        };
+      }
+
+      // Círculo/elipse. Se prueba después del rectángulo para que los cuadrados
+      // dibujados a mano no terminen convertidos en círculos.
       const cx = (minX + maxX) / 2;
       const cy = (minY + maxY) / 2;
-      const radii = xy.map(function(p){ return Math.hypot(p.x-cx,p.y-cy); });
+      const radii = xy.map(function(p){
+        const nx=(p.x-cx)/Math.max(1,w/2);
+        const ny=(p.y-cy)/Math.max(1,h/2);
+        return Math.hypot(nx,ny);
+      });
       const mean = radii.reduce(function(a,b){return a+b;},0) / radii.length;
       const variance = radii.reduce(function(a,b){ const d=b-mean; return a+d*d;},0) / radii.length;
-      const radialCv = Math.sqrt(variance) / Math.max(1,mean);
+      const radialCv = Math.sqrt(variance) / Math.max(0.001,mean);
       const ratio = w / Math.max(1,h);
-      if (ratio > 0.58 && ratio < 1.72 && radialCv < 0.27) {
+      if (ratio > 0.42 && ratio < 2.35 && radialCv < 0.18) {
         return {
           type: 'circle',
+          label: ratio > 0.82 && ratio < 1.22 ? 'Círculo' : 'Elipse',
           data: {
             x1: minX / LOGICAL_WIDTH,
             y1: minY,
@@ -2892,19 +2939,26 @@
   }
 
   function scheduleShapeHoldSnap() {
+    if (!currentDraft || !['pen','highlighter'].includes(currentDraft.tool) || currentDraft.points.length < 2 || currentDraft.snappedByHold) return;
+    const last=currentDraft.points[currentDraft.points.length-1];
+    const anchor={x:last.x*LOGICAL_WIDTH,y:last.y};
+    const prev=currentDraft._shapeHoldAnchor;
+    const moved=!prev||Math.hypot(anchor.x-prev.x,anchor.y-prev.y)>=7;
+    if (!moved && shapeHoldTimer) return;
+    if (moved) currentDraft._shapeHoldAnchor=anchor;
     clearTimeout(shapeHoldTimer);
-    if (!currentDraft || !['pen','highlighter'].includes(currentDraft.tool) || currentDraft.points.length < 2) return;
     shapeHoldTimer = setTimeout(function() {
-      if (!currentDraft) return;
+      if (!currentDraft || currentDraft.snappedByHold) return;
       const recognized = classifyHeldShape(currentDraft);
       if (!recognized) return;
       currentDraft.shapeType = recognized.type;
       currentDraft.shapeData = recognized.data;
       currentDraft.snappedByHold = true;
+      currentDraft._shapeSnapAnchor = currentDraft._shapeHoldAnchor;
       redraw();
       if (navigator.vibrate) navigator.vibrate(18);
-      flashStatus(recognized.type === 'line' ? '📏 Línea enderezada' : '◯ Círculo reconocido');
-    }, 620);
+      flashStatus((recognized.type==='line'?'📏 ':'⬡ ')+(recognized.label||'Forma')+' reconocida');
+    }, 520);
   }
 
   function setupCanvas(getTool, getEraserMode, getShapeType, getBrush) {
@@ -3138,9 +3192,17 @@
       maybeGrowPage(activePage, p.y);
 
       if (currentDraft.snappedByHold && ['pen','highlighter'].includes(currentDraft.tool)) {
+        const a=currentDraft._shapeSnapAnchor||currentDraft._shapeHoldAnchor;
+        const movedAfterSnap=a?Math.hypot(p.x*LOGICAL_WIDTH-a.x,p.y-a.y):999;
+        if (movedAfterSnap < 9) {
+          e.preventDefault();
+          return;
+        }
         delete currentDraft.shapeType;
         delete currentDraft.shapeData;
         currentDraft.snappedByHold = false;
+        currentDraft._shapeHoldAnchor={x:p.x*LOGICAL_WIDTH,y:p.y};
+        currentDraft._shapeSnapAnchor=null;
       }
 
       if (currentDraft.tool === 'line' || currentDraft.tool === 'shape') {
