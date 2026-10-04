@@ -16,7 +16,7 @@
   const MAX_CANVAS_DIMENSION = 15000;
   const MIN_ZOOM = 0.30;
   const MAX_ZOOM = 4.0;
-  const VIEWPORT_OVERSCAN = 320;
+  const VIEWPORT_OVERSCAN = 720;
   const CHANNEL_VERSION = 'v1';
 
   let currentNotebookId = null;
@@ -55,6 +55,9 @@
   let shapeHoldTimer = null;
   let scrollPersistTimer = null;
   let focusBroadcastTimer = null;
+  let inkPersistTimer = null;
+  let inkPersistMaxTimer = null;
+  let inkRefreshTimer = null;
   let pencilDetected = false;
   let redrawFrame = 0;
   let lastViewportPaintY = null;
@@ -2759,7 +2762,7 @@
     const coarse = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
     if (memory && memory <= 2) return 6500000;
     if (memory && memory <= 4) return 9000000;
-    if (coarse) return 10500000;
+    if (coarse) return 7600000;
     return MAX_CANVAS_PIXELS;
   }
 
@@ -2768,7 +2771,8 @@
     const r = canvas.getBoundingClientRect();
     const cssW = Math.max(1, r.width);
     const cssH = Math.max(1, r.height);
-    const device = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+    const coarse = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+    const device = coarse ? Math.max(1, Math.min(1.5, window.devicePixelRatio || 1)) : Math.max(1, Math.min(3, window.devicePixelRatio || 1));
     const budget = canvasMemoryBudget();
     const pixelCap = Math.sqrt(budget / Math.max(1, cssW * cssH));
     const dimensionCap = Math.min(MAX_CANVAS_DIMENSION / cssW, MAX_CANVAS_DIMENSION / cssH);
@@ -3075,7 +3079,7 @@
       const scale = currentCanvasScale();
       p.scrollY = scroller.scrollTop / Math.max(0.001, scale);
       p.scrollX = scroller.scrollLeft / Math.max(0.001, scale);
-      if (lastViewportPaintY === null || Math.abs(p.scrollY - lastViewportPaintY) > 150) requestRedraw();
+      if (lastViewportPaintY === null || Math.abs(p.scrollY - lastViewportPaintY) > 520) requestRedraw();
       sendFocusSoon(60);
       if (scroller.scrollTop + scroller.clientHeight > scroller.scrollHeight - 260) {
         growPage(p, PAGE_GROW_BY);
