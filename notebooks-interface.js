@@ -327,7 +327,8 @@
       });
       if(relevant)setTimeout(enhance,0);
     });
-    observer.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['class']});
+    const editorPanel=document.getElementById('nbEditorPanel');
+    observer.observe(editorPanel||document.body,{childList:true,subtree:true});
     document.addEventListener('click',()=>setTimeout(syncDockState,0),true);
     document.addEventListener('change',()=>setTimeout(syncDockState,0),true);
     activePoll=setInterval(()=>{if(isEditorVisible())enhance();},700);
