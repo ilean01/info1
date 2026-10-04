@@ -16,6 +16,7 @@
   let syncChannelName = null;
   let baseSenderName = null;
   let ready = false;
+  let syncConnecting = false;
   let baseReady = false;
   let flushing = false;
   let persistDepth = 0;
@@ -274,7 +275,7 @@
       try { if (syncChannel) sb.removeChannel(syncChannel); } catch (_) {}
       // The ink channel belongs to notebooks-realtime; never remove it here.
     }
-    syncChannel=null;syncClient=null;baseSender=null;ready=false;baseReady=false;
+    syncChannel=null;syncClient=null;baseSender=null;ready=false;syncConnecting=false;baseReady=false;
   }
 
   function connect() {
@@ -293,7 +294,7 @@
     if (baseReady && !wasBaseReady) setTimeout(flushAll,0);
     const wantedSync=syncTopic(c.workspaceId);
     const wantedBase=baseTopic(c.workspaceId);
-    if (syncChannel && syncClient===c.client && syncChannelName===wantedSync && baseSender && baseSenderName===wantedBase) {
+    if (syncChannel && syncClient===c.client && syncChannelName===wantedSync && baseSender && baseSenderName===wantedBase && (ready || syncConnecting)) {
       updateStatus();
       return;
     }
@@ -306,18 +307,37 @@
     sentAssets.clear();
 
     syncClient=c.client;
-    syncChannel=c.client.channel(wantedSync,{config:{broadcast:{self:false,ack:false}}})
-      .on('broadcast',{event:'sync'},msg=>handleSync(msg && msg.payload ? msg.payload : {}))
-      .subscribe(status=>{
-        const was=ready;
-        ready=status==='SUBSCRIBED';
-        if (ready && !was) {
+    syncConnecting=true;
+    const thisSyncChannel=c.client.channel(wantedSync,{config:{broadcast:{self:false,ack:false}}})
+      .on('broadcast',{event:'sync'},msg=>handleSync(msg && msg.payload ? msg.payload : {}));
+    syncChannel=thisSyncChannel;
+    thisSyncChannel.subscribe(status=>{
+      if(syncChannel!==thisSyncChannel)return;
+      const was=ready;
+      ready=status==='SUBSCRIBED';
+      if (ready) {
+        syncConnecting=false;
+        if (!was) {
           reconnectCount++;
           sendSync('hello',Object.assign({},currentIds())).catch(()=>{});
           setTimeout(flushAll,50);
         }
         updateStatus();
-      });
+        return;
+      }
+      if(status==='CHANNEL_ERROR'||status==='TIMED_OUT'||status==='CLOSED'){
+        ready=false;
+        syncConnecting=false;
+        try{c.client.removeChannel(thisSyncChannel);}catch(_){}
+        if(syncChannel===thisSyncChannel){
+          syncChannel=null;
+          syncChannelName=null;
+          syncClient=null;
+        }
+        updateStatus();
+        setTimeout(connect,700);
+      }
+    });
 
     // Reuse the subscribed core channel; a second subscribe throws in supabase-js.
     if (baseReady) setTimeout(flushAll,60);
@@ -712,6 +732,7 @@
 
     window.addEventListener('online',()=>{connect();setTimeout(flushAll,100);updateStatus();});
     window.addEventListener('offline',()=>{disconnectCount++;disconnectChannels();updateStatus();});
+    window.addEventListener('info1:workspace-changed',()=>{disconnectChannels();setTimeout(connect,150);});
     setInterval(connect,1200);
     setInterval(trackContext,500);
     setInterval(()=>{remoteSelections.forEach((v,k)=>{if(Date.now()-(v.at||0)>15000)remoteSelections.delete(k);});renderRemoteSelections();},5000);
