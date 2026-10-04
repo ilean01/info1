@@ -66,6 +66,67 @@
     return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   }
 
+  function isQuotaError(error) {
+    const name = String(error?.name || '');
+    const message = String(error?.message || '');
+    return name === 'QuotaExceededError' || name === 'NS_ERROR_DOM_QUOTA_REACHED' || /quota/i.test(message);
+  }
+
+  function saveRecoveryIndexedDb(raw) {
+    if (!raw || !window.indexedDB || !workspace?.id) return Promise.resolve(false);
+    return new Promise(resolve => {
+      try {
+        const request = indexedDB.open('info1-cloud-recovery-v1', 1);
+        request.onupgradeneeded = () => {
+          const db = request.result;
+          if (!db.objectStoreNames.contains('snapshots')) db.createObjectStore('snapshots');
+        };
+        request.onerror = () => resolve(false);
+        request.onsuccess = () => {
+          const db = request.result;
+          try {
+            const tx = db.transaction('snapshots', 'readwrite');
+            tx.objectStore('snapshots').put({
+              raw,
+              savedAt: Date.now(),
+              workspaceId: workspace.id
+            }, workspace.id);
+            tx.oncomplete = () => { try { db.close(); } catch {} resolve(true); };
+            tx.onerror = () => { try { db.close(); } catch {} resolve(false); };
+            tx.onabort = () => { try { db.close(); } catch {} resolve(false); };
+          } catch (_) {
+            try { db.close(); } catch {}
+            resolve(false);
+          }
+        };
+      } catch (_) {
+        resolve(false);
+      }
+    });
+  }
+
+  function writePrimaryState(raw) {
+    try {
+      localStorage.setItem(KEY, raw);
+      window.INFO1_LOCAL_SAVE_OK = true;
+      return true;
+    } catch (error) {
+      if (!isQuotaError(error)) throw error;
+
+      // Las versiones anteriores guardaban una copia completa adicional en
+      // localStorage. En iPad eso puede ocupar casi el doble y agotar la cuota.
+      try { localStorage.removeItem(RECOVERY_KEY); } catch {}
+      try {
+        localStorage.setItem(KEY, raw);
+        window.INFO1_LOCAL_SAVE_OK = true;
+        return true;
+      } catch (retryError) {
+        window.INFO1_LOCAL_SAVE_OK = false;
+        throw retryError;
+      }
+    }
+  }
+
   function wait(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
@@ -516,8 +577,13 @@
       const oldRaw = localRaw();
 
       applyingRemote = true;
-      if (oldRaw && oldRaw !== nextRaw) localStorage.setItem(RECOVERY_KEY, oldRaw);
-      localStorage.setItem(KEY, nextRaw);
+      if (oldRaw && oldRaw !== nextRaw) {
+        // El backup completo va a IndexedDB, que tiene mucha más capacidad que
+        // localStorage en Safari/iPadOS. No duplicamos el estado gigante.
+        await saveRecoveryIndexedDb(oldRaw);
+      }
+      try { localStorage.removeItem(RECOVERY_KEY); } catch {}
+      writePrimaryState(nextRaw);
       remoteRevision = Number(remote.revision || 1);
       localStorage.setItem(`${HYDRATED_PREFIX}${workspace.id}`, String(remoteRevision));
       localStorage.removeItem(UNSYNCED_KEY);
@@ -558,7 +624,10 @@
         console.warn('INFO1 auto cloud pull:', e);
         return false;
       }
-      badge(`☁️ No pude cargar la nube: ${e?.message || 'error desconocido'}`, 'bad', '<button id="info1PullCloud">Reintentar</button>');
+      const storageMessage = isQuotaError(e)
+        ? 'El almacenamiento local de este iPad está lleno. No es la cuota de Supabase. Liberé la copia duplicada; cerrá y abrí INFO 1 y reintentá.'
+        : (e?.message || 'error desconocido');
+      badge(`☁️ No pude cargar la nube: ${storageMessage}`, 'bad', '<button id="info1PullCloud">Reintentar</button>');
       bindStandardActions();
       return false;
     }
@@ -889,8 +958,14 @@
     },
     cacheRealtimeState: next => {
       const raw = JSON.stringify(next);
-      localStorage.setItem(KEY, raw);
-      if (!dirty && !conflict) lastSeenRaw = raw;
+      try {
+        writePrimaryState(raw);
+        if (!dirty && !conflict) lastSeenRaw = raw;
+        return true;
+      } catch (e) {
+        console.warn('INFO1 realtime cache: almacenamiento local lleno', e);
+        return false;
+      }
     },
     pull: () => loadCloudIntoLocal(true),
     pushLocal: keepLocalAsCloud,
