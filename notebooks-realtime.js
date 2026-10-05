@@ -74,6 +74,7 @@
   let selectedImageId = null;
   let imageGesture = null;
   let imagePasteListenerInstalled = false;
+  let beginExternalPencilStroke = null;
 
   function uuid() {
     return crypto && crypto.randomUUID
@@ -3174,7 +3175,7 @@
       }
     }
 
-    canvas.onpointerdown = function(e) {
+    const handleCanvasPointerDown = function(e) {
       if (selectedImageId) {
         selectedImageId = null;
         renderImageLayer();
@@ -3205,8 +3206,15 @@
         }
       }
 
+      if (readOnly && followMode && e.pointerType === 'pen') {
+        followMode = false;
+        readOnly = false;
+        INFO1_LOCAL.setItem(FOLLOW_KEY, '0');
+        updateFollowButton();
+        flashStatus('✍️ Pencil activo · dejaste de seguir para poder escribir');
+      }
       if (readOnly) return;
-      canvas.setPointerCapture && canvas.setPointerCapture(e.pointerId);
+      try { if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId); } catch (_) {}
       drawPointerId = e.pointerId;
       const tool = getTool();
       if (tool === 'eraser' && getEraserMode && getEraserMode() === 'stroke') {
@@ -3251,6 +3259,8 @@
       else drawStroke(currentDraft);
       e.preventDefault();
     };
+    canvas.onpointerdown = handleCanvasPointerDown;
+    beginExternalPencilStroke = handleCanvasPointerDown;
 
     canvas.onpointermove = function(e) {
       if (e.pointerType === 'touch' && activePointers.has(e.pointerId)) {
