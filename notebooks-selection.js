@@ -5,8 +5,9 @@
   const LOGICAL_WIDTH = 1000;
   const TOOL_ID = 'nbLassoExt';
   const STYLE_ID = 'nbSelectionExtStyle';
+  const LASSO_KEY = 'info1-notebook-lasso-active-v1';
 
-  let selectionMode = false;
+  let selectionMode = INFO1_LOCAL.getItem(LASSO_KEY) === '1';
   let selectedStrokes = new Set();
   let selectedImages = new Set();
   let clipboard = null;
@@ -354,6 +355,7 @@
   function leaveSelectionForDrawing() {
     if (!selectionMode && !hasSelection()) return;
     selectionMode=false;
+    INFO1_LOCAL.setItem(LASSO_KEY,'0');
     clearSelection(false);
     const lasso=document.getElementById(TOOL_ID);
     if (lasso) lasso.classList.remove('active');
@@ -393,6 +395,7 @@
       else toolbar.appendChild(btn);
       btn.addEventListener('click',() => {
         selectionMode=!selectionMode;
+        INFO1_LOCAL.setItem(LASSO_KEY,selectionMode?'1':'0');
         btn.classList.toggle('active',selectionMode);
         if (!selectionMode) {
           lassoPoints=null;
@@ -480,10 +483,9 @@
     const cv=canvas();
     if (!cv || cv===boundCanvas) return;
     if (boundCanvas) {
-      selectionMode=false;
+      // Si el canvas se reconstruye, mantenemos el lazo activo hasta que
+      // la persona lo desactive o elija otra herramienta.
       clearSelection(false);
-      const lasso=document.getElementById(TOOL_ID);
-      if(lasso) lasso.classList.remove('active');
     }
     boundCanvas=cv;
 
@@ -517,12 +519,12 @@
         const polygon=(lassoPoints||[]).slice();
         lassoPoints=null;
         selectWithPolygon(polygon);
-        selectionMode=false;
-        const lassoBtn=document.getElementById(TOOL_ID);
-        if(lassoBtn) lassoBtn.classList.remove('active');
+        // El lazo queda activo para seguir seleccionando. No volvemos a Lápiz
+        // automáticamente: solo cambia cuando la persona desactiva el lazo o
+        // elige otra herramienta.
         renderOverlay();
         updateTools();
-        syncSelectionPresence({active:false,lasso:null});
+        syncSelectionPresence({active:true,lasso:null});
       };
       window.addEventListener('pointermove',move,{capture:true,passive:false});
       window.addEventListener('pointerup',end,true);
@@ -1124,11 +1126,10 @@
     const nb=currentNotebook(), page=currentPage();
     const key=(nb?nb.id:'')+':'+(page?page.id:'');
     if (lastContextKey && key!==lastContextKey) {
-      selectionMode=false;
       clearSelection(false);
       const lasso=document.getElementById(TOOL_ID);
-      if(lasso) lasso.classList.remove('active');
-      syncSelectionPresence({active:false,cleared:true,lasso:null});
+      if(lasso) lasso.classList.toggle('active',selectionMode);
+      syncSelectionPresence({active:selectionMode,cleared:true,lasso:null});
     }
     lastContextKey=key;
     ensureUi();
