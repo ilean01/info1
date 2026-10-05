@@ -498,10 +498,8 @@
     const hit = document.getElementById('nbLaserHit');
     if (hit) hit.classList.toggle('active', active);
     syncControls();
-    if (!active && restorePen) {
-      const pen = document.getElementById('nbPen');
-      if (pen && !pen.disabled) pen.click();
-    }
+    // Al apagar el láser no cambiamos la herramienta de dibujo.
+    // Si estabas con borrador, seguís con borrador; si estabas con lápiz, seguís con lápiz.
   }
 
   function toggle() { setActive(!active, active); }
