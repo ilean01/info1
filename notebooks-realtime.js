@@ -10,6 +10,8 @@
   const PENCIL_MODE_KEY = 'info1-notebook-finger-mode-v1';
   const BRUSH_KEY = 'info1-notebook-brush-v1';
   const WIDTH_KEY = 'info1-notebook-pen-width-v1';
+  const TOOL_KEY = 'info1-notebook-active-tool-v1';
+  const SHAPE_KEY = 'info1-notebook-active-shape-v1';
   const LOGICAL_WIDTH = 1000;
   const INITIAL_PAGE_HEIGHT = 1600;
   const PAGE_GROW_BY = 1200;
@@ -51,6 +53,9 @@
   let fingerPanMode = INFO1_LOCAL.getItem(PENCIL_MODE_KEY) !== 'draw';
   let currentBrush = INFO1_LOCAL.getItem(BRUSH_KEY) || 'ballpoint';
   let currentWidth = clamp(Number(INFO1_LOCAL.getItem(WIDTH_KEY)) || 4, 1, 18);
+  const savedTool = INFO1_LOCAL.getItem(TOOL_KEY);
+  let currentTool = ['pen','highlighter','line','shape','eraser'].includes(savedTool) ? savedTool : 'pen';
+  let currentShapeType = ['circle','rectangle','triangle'].includes(INFO1_LOCAL.getItem(SHAPE_KEY)) ? INFO1_LOCAL.getItem(SHAPE_KEY) : '';
   let activePointers = new Map();
   let gestureState = null;
   let drawPointerId = null;
@@ -1838,8 +1843,8 @@
       INFO1_LOCAL.setItem(WIDTH_KEY, String(currentWidth));
     };
 
-    let tool = 'pen';
-    let shapeType = '';
+    let tool = currentTool;
+    let shapeType = currentShapeType;
     const pen = document.getElementById('nbPen');
     const highlighter = document.getElementById('nbHighlighter');
     const lineBtn = document.getElementById('nbLine');
@@ -1882,7 +1887,11 @@
 
     function selectTool(next, shape) {
       tool = next;
-      shapeType = shape || '';
+      shapeType = next === 'shape' ? (shape || currentShapeType || 'circle') : '';
+      currentTool = tool;
+      currentShapeType = shapeType;
+      INFO1_LOCAL.setItem(TOOL_KEY, currentTool);
+      if (currentShapeType) INFO1_LOCAL.setItem(SHAPE_KEY, currentShapeType);
       pen.classList.toggle('active', next === 'pen');
       highlighter && highlighter.classList.toggle('active', next === 'highlighter');
       lineBtn && lineBtn.classList.toggle('active', next === 'line');
@@ -1893,6 +1902,8 @@
       }
       if (eraserModeSelect) eraserModeSelect.classList.toggle('active', next === 'eraser');
     }
+
+    selectTool(tool, shapeType);
 
     pen.onclick = function() { selectTool('pen'); };
     if (highlighter) highlighter.onclick = function() { selectTool('highlighter'); };
