@@ -272,7 +272,7 @@
       '#'+TOOL_ID+'.active{background:#284d8e!important;border-color:#78a7ff!important}' +
       '.nb-selection-ext-tools{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:8px 10px;border:1px solid #42659b;background:#0b1730;border-radius:12px;margin:7px 0}' +
       '.nb-selection-ext-tools.hidden{display:none}.nb-selection-ext-tools .label{font-weight:900;color:#d7e6ff;margin-right:auto}' +
-      '.nb-selection-ext-layer{position:absolute;inset:0;z-index:8;pointer-events:none}.nb-selection-ext-box{position:absolute;border:2px dashed #3478f6;background:#3478f612;box-sizing:border-box;pointer-events:auto;touch-action:none}' +
+      '.nb-selection-ext-layer{position:absolute;inset:0;z-index:8;pointer-events:none}.nb-selection-ext-box{position:absolute;border:2px dashed #3478f6;background:#3478f612;box-sizing:border-box;pointer-events:none;touch-action:none}' +
       '.nb-selection-ext-box:before{content:"";position:absolute;inset:-7px;border:1px solid #8eb6ff66;pointer-events:none}' +
       '.nb-selection-ext-handle{position:absolute;width:24px;height:24px;border-radius:999px;background:#fff;border:2px solid #3478f6;box-shadow:0 2px 10px #0007;pointer-events:auto}' +
       '.nb-selection-ext-resize{right:-13px;bottom:-13px;cursor:nwse-resize}.nb-selection-ext-rotate{left:50%;top:-40px;transform:translateX(-50%);cursor:grab}' +
@@ -479,6 +479,12 @@
   function bindCanvas() {
     const cv=canvas();
     if (!cv || cv===boundCanvas) return;
+    if (boundCanvas) {
+      selectionMode=false;
+      clearSelection(false);
+      const lasso=document.getElementById(TOOL_ID);
+      if(lasso) lasso.classList.remove('active');
+    }
     boundCanvas=cv;
 
     cv.addEventListener('pointerdown',e => {
@@ -511,6 +517,12 @@
         const polygon=(lassoPoints||[]).slice();
         lassoPoints=null;
         selectWithPolygon(polygon);
+        selectionMode=false;
+        const lassoBtn=document.getElementById(TOOL_ID);
+        if(lassoBtn) lassoBtn.classList.remove('active');
+        renderOverlay();
+        updateTools();
+        syncSelectionPresence({active:false,lasso:null});
       };
       window.addEventListener('pointermove',move,{capture:true,passive:false});
       window.addEventListener('pointerup',end,true);
@@ -1111,7 +1123,13 @@
     if (!isEditorVisible()) return;
     const nb=currentNotebook(), page=currentPage();
     const key=(nb?nb.id:'')+':'+(page?page.id:'');
-    if (lastContextKey && key!==lastContextKey) clearSelection(false);
+    if (lastContextKey && key!==lastContextKey) {
+      selectionMode=false;
+      clearSelection(false);
+      const lasso=document.getElementById(TOOL_ID);
+      if(lasso) lasso.classList.remove('active');
+      syncSelectionPresence({active:false,cleared:true,lasso:null});
+    }
     lastContextKey=key;
     ensureUi();
   }
