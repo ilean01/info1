@@ -3224,7 +3224,13 @@
         const p = getPage(getNotebook(currentNotebookId), currentPageId);
         gestureState = {
           type: 'pinch',
+          startedAt: performance.now(),
           startDistance: Math.max(10, Math.hypot(dx,dy)),
+          startCenterClientX: centerClientX,
+          startCenterClientY: centerClientY,
+          maxCenterMove: 0,
+          maxDistanceDelta: 0,
+          pinchActivated: false,
           startZoom: p ? p.zoom : 1,
           pendingZoom: p ? p.zoom : 1,
           anchorX: centerX,
@@ -3394,8 +3400,22 @@
             const dx = pair[1].x - pair[0].x;
             const dy = pair[1].y - pair[0].y;
             const dist = Math.max(10, Math.hypot(dx,dy));
+            const centerClientX=(pair[0].x+pair[1].x)/2;
+            const centerClientY=(pair[0].y+pair[1].y)/2;
+            if (gestureState && gestureState.startDistance) {
+              const centerMove=Math.hypot(
+                centerClientX-(gestureState.startCenterClientX ?? centerClientX),
+                centerClientY-(gestureState.startCenterClientY ?? centerClientY)
+              );
+              const distanceDelta=Math.abs(dist-gestureState.startDistance);
+              gestureState.maxCenterMove=Math.max(gestureState.maxCenterMove||0,centerMove);
+              gestureState.maxDistanceDelta=Math.max(gestureState.maxDistanceDelta||0,distanceDelta);
+              if (!gestureState.pinchActivated && (centerMove>10 || distanceDelta>10)) {
+                gestureState.pinchActivated=true;
+              }
+            }
             const p = getPage(getNotebook(currentNotebookId), currentPageId);
-            if (p && gestureState && gestureState.startDistance) {
+            if (p && gestureState && gestureState.startDistance && gestureState.pinchActivated) {
               const nextZoom = gestureState.startZoom * dist / gestureState.startDistance;
               previewPinchZoom(p, nextZoom, gestureState);
             }
@@ -3481,10 +3501,43 @@
 
     const finish = function(e) {
       if (e.pointerType === 'touch' && activePointers.has(e.pointerId)) {
-        if (gestureState && gestureState.type === 'pinch') {
-          const pinchPage = getPage(getNotebook(currentNotebookId), currentPageId);
-          commitPinchZoom(pinchPage, gestureState);
+        if (gestureState && gestureState.type === 'two-finger-tap-finish') {
+          activePointers.delete(e.pointerId);
+          if (!activePointers.size) gestureState=null;
+          e.preventDefault();
+          return;
         }
+
+        if (gestureState && gestureState.type === 'pinch') {
+          const duration=performance.now()-(gestureState.startedAt||performance.now());
+          const isTwoFingerTap=
+            activePointers.size===2 &&
+            !gestureState.pinchActivated &&
+            duration<=360 &&
+            (gestureState.maxCenterMove||0)<=12 &&
+            (gestureState.maxDistanceDelta||0)<=12;
+
+          if (isTwoFingerTap) {
+            const stage=document.getElementById('nbCanvasStage');
+            if(stage){
+              stage.style.transform='';
+              stage.style.transformOrigin='0 0';
+              stage.style.willChange='';
+            }
+            activePointers.delete(e.pointerId);
+            gestureState={type:'two-finger-tap-finish'};
+            undo();
+            flashStatus('↶ Deshacer');
+            e.preventDefault();
+            return;
+          }
+
+          if (gestureState.pinchActivated) {
+            const pinchPage = getPage(getNotebook(currentNotebookId), currentPageId);
+            commitPinchZoom(pinchPage, gestureState);
+          }
+        }
+
         activePointers.delete(e.pointerId);
         if (activePointers.size >= 2) {
           beginTouchGesture(e);
