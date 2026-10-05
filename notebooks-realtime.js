@@ -3447,7 +3447,7 @@
     };
     canvas.onpointermove = handlePointerMove;
     if ('onpointerrawupdate' in window) {
-      canvas.addEventListener('pointerrawupdate', handlePointerMove, { passive:false });
+      canvas.onpointerrawupdate = handlePointerMove;
     }
 
     const finish = function(e) {
