@@ -133,8 +133,12 @@
   }
 
   function enqueueBaseEvent(kind,payload) {
-    if (kind==='stroke-start' || kind==='stroke-points') {
-      markChanged();
+    if (kind==='stroke-points') {
+      lastChangeAt=Date.now();
+      return;
+    }
+    if (kind==='stroke-start') {
+      lastChangeAt=Date.now();
       return;
     }
     const queue=loadQueue();
@@ -171,8 +175,18 @@
     updateStatus();
   }
 
-  function onBaseBroadcast() {
+  function onBaseBroadcast(kind) {
     lastSentAt=Date.now();
+    // Los paquetes de tinta llegan ~cada 15 ms. Actualizar el DOM/estado de
+    // guardado por cada paquete competía con el Apple Pencil en iPad.
+    if (kind==='stroke-points') {
+      lastChangeAt=lastSentAt;
+      return;
+    }
+    if (kind==='stroke-start') {
+      lastChangeAt=lastSentAt;
+      return;
+    }
     markChanged();
   }
 
