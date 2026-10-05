@@ -10,6 +10,7 @@
   const PENCIL_MODE_KEY = 'info1-notebook-finger-mode-v1';
   const BRUSH_KEY = 'info1-notebook-brush-v1';
   const WIDTH_KEY = 'info1-notebook-pen-width-v1';
+  const COLOR_KEY = 'info1-notebook-pen-color-v1';
   const TOOL_KEY = 'info1-notebook-active-tool-v1';
   const SHAPE_KEY = 'info1-notebook-active-shape-v1';
   const LOGICAL_WIDTH = 1000;
@@ -53,12 +54,16 @@
   let fingerPanMode = INFO1_LOCAL.getItem(PENCIL_MODE_KEY) !== 'draw';
   let currentBrush = INFO1_LOCAL.getItem(BRUSH_KEY) || 'ballpoint';
   let currentWidth = clamp(Number(INFO1_LOCAL.getItem(WIDTH_KEY)) || 4, 1, 18);
+  let currentColor = /^#[0-9a-f]{6}$/i.test(INFO1_LOCAL.getItem(COLOR_KEY) || '')
+    ? INFO1_LOCAL.getItem(COLOR_KEY)
+    : '#16264a';
   const savedTool = INFO1_LOCAL.getItem(TOOL_KEY);
   let currentTool = ['pen','highlighter','line','shape','eraser'].includes(savedTool) ? savedTool : 'pen';
   let currentShapeType = ['circle','rectangle','triangle'].includes(INFO1_LOCAL.getItem(SHAPE_KEY)) ? INFO1_LOCAL.getItem(SHAPE_KEY) : '';
   let activePointers = new Map();
   let gestureState = null;
   let drawPointerId = null;
+  let drawPointerType = null;
   let shapeHoldTimer = null;
   let scrollPersistTimer = null;
   let focusBroadcastTimer = null;
@@ -1717,7 +1722,7 @@
           '<option value="pixel">Borrar parte</option>' +
           '<option value="stroke">Borrar trazo completo</option>' +
         '</select>' +
-        '<input id="nbColor" type="color" value="#16264a" aria-label="Color">' +
+        '<input id="nbColor" type="color" value="' + currentColor + '" aria-label="Color">' +
         '<label class="small">Grosor <input id="nbWidth" type="range" min="1" max="18" step="0.5" value="' + currentWidth + '" aria-label="Grosor del lápiz"></label>' +
         '<button id="nbUndo" type="button">↶ Deshacer</button>' +
         '<button id="nbRedo" type="button">↷ Rehacer</button>' +
@@ -1835,6 +1840,17 @@
     if (deletePages) {
       deletePages.disabled = readOnly;
       deletePages.onclick = deleteSelectedPages;
+    }
+
+    const colorInput = document.getElementById('nbColor');
+    if (colorInput) {
+      colorInput.value = currentColor;
+      colorInput.oninput = colorInput.onchange = function() {
+        const next = String(colorInput.value || '').toLowerCase();
+        if (!/^#[0-9a-f]{6}$/.test(next)) return;
+        currentColor = next;
+        INFO1_LOCAL.setItem(COLOR_KEY, currentColor);
+      };
     }
 
     const widthInput = document.getElementById('nbWidth');
@@ -3241,10 +3257,10 @@
         gestureState = null;
         strokeEraseActive = false;
         strokeEraseSeen.clear();
-        if (drawPointerId !== null && drawPointerId !== e.pointerId && currentDraft) {
-          // Al escribir muy rápido iPadOS puede entregar el siguiente pointerdown
-          // antes de que procesemos el pointerup anterior. Nunca descartamos ese trazo:
-          // lo cerramos y lo guardamos antes de empezar el nuevo.
+        if (currentDraft) {
+          // Safari/iPadOS suele reutilizar el MISMO pointerId entre trazos.
+          // Si el nuevo contacto llega antes que el pointerup anterior, cerramos
+          // ese trazo primero en vez de sobrescribirlo y perder una letra/rayita.
           flushPoints();
           const staleNb = getNotebook(currentNotebookId);
           const stalePage = getPage(staleNb, currentPageId);
@@ -3267,6 +3283,7 @@
           clearTimeout(shapeHoldTimer);
         }
         drawPointerId = null;
+        drawPointerType = null;
       }
 
       if (selectedImageId) {
@@ -3291,6 +3308,12 @@
       }
 
       if (e.pointerType === 'touch') {
+        // Mientras el Apple Pencil está apoyado, ignoramos palma/dedos accidentales.
+        // Esto evita que un gesto táctil cancele un trazo rápido.
+        if (drawPointerType === 'pen' && currentDraft) {
+          e.preventDefault();
+          return;
+        }
         activePointers.set(e.pointerId, { x:e.clientX, y:e.clientY });
         if (fingerPanMode || activePointers.size >= 2 || readOnly) {
           beginTouchGesture(e);
@@ -3309,6 +3332,7 @@
       if (readOnly) return;
       try { if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId); } catch (_) {}
       drawPointerId = e.pointerId;
+      drawPointerType = e.pointerType || 'mouse';
       const tool = getTool();
       if (tool === 'eraser' && getEraserMode && getEraserMode() === 'stroke') {
         strokeEraseActive = true;
@@ -3326,7 +3350,7 @@
         tool: tool,
         brush: getBrush ? getBrush() : 'ballpoint',
         coordVersion: 2,
-        color: document.getElementById('nbColor').value || '#16264a',
+        color: currentColor,
         width: tool === 'highlighter' ? Math.max(10, width * 3) : width,
         startedAt: Date.now(),
         author: window.INFO1_NOTEBOOK_COLLABORATION && window.INFO1_NOTEBOOK_COLLABORATION.authorStamp
@@ -3356,6 +3380,10 @@
     beginExternalPencilStroke = handleCanvasPointerDown;
 
     const handlePointerMove = function(e) {
+      if (e.pointerType === 'touch' && drawPointerType === 'pen' && currentDraft) {
+        e.preventDefault();
+        return;
+      }
       if (e.pointerType === 'touch' && activePointers.has(e.pointerId)) {
         activePointers.set(e.pointerId, { x:e.clientX, y:e.clientY });
         if (gestureState && (fingerPanMode || activePointers.size >= 2 || readOnly)) {
@@ -3429,7 +3457,7 @@
           const samplePoint = pointFromEvent(sample);
           const last = currentDraft.points[currentDraft.points.length - 1];
           const logicalDistance = last ? Math.hypot((samplePoint.x-last.x)*LOGICAL_WIDTH, samplePoint.y-last.y) : 999;
-          if (logicalDistance < 0.55) return;
+          if (logicalDistance < 0.18) return;
           currentDraft.points.push(samplePoint);
           pointQueue.push(samplePoint);
           added = true;
@@ -3485,31 +3513,38 @@
         strokeEraseActive = false;
         strokeEraseSeen.clear();
         drawPointerId = null;
+        drawPointerType = null;
         if (e) e.preventDefault();
         return;
       }
       if (!currentDraft) {
         drawPointerId = null;
+        drawPointerType = null;
         return;
       }
 
       if (e && Number.isFinite(Number(e.clientX)) && Number.isFinite(Number(e.clientY))) {
-        const endPoint = pointFromEvent(e);
+        const finalSamples = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
+        const samples = finalSamples.length ? finalSamples.concat([e]) : [e];
         if (currentDraft.tool === 'line' || currentDraft.tool === 'shape') {
+          const endPoint = pointFromEvent(samples[samples.length - 1]);
           if (currentDraft.shapeData) {
             currentDraft.points = [currentDraft.points[0], endPoint];
             currentDraft.shapeData.x2 = endPoint.x;
             currentDraft.shapeData.y2 = endPoint.y;
           }
         } else {
-          const last = currentDraft.points[currentDraft.points.length - 1];
-          const endDistance = last ? Math.hypot((endPoint.x-last.x)*LOGICAL_WIDTH,endPoint.y-last.y) : 999;
-          if (endDistance >= 0.2) {
-            const previousCount=currentDraft.points.length;
+          const previousCount=currentDraft.points.length;
+          samples.forEach(function(sample) {
+            if (!Number.isFinite(Number(sample.clientX)) || !Number.isFinite(Number(sample.clientY))) return;
+            const endPoint = pointFromEvent(sample);
+            const last = currentDraft.points[currentDraft.points.length - 1];
+            const endDistance = last ? Math.hypot((endPoint.x-last.x)*LOGICAL_WIDTH,endPoint.y-last.y) : 999;
+            if (endDistance < 0.08) return;
             currentDraft.points.push(endPoint);
             pointQueue.push(endPoint);
-            drawStrokeIncremental(currentDraft,previousCount);
-          }
+          });
+          if (currentDraft.points.length > previousCount) drawStrokeIncremental(currentDraft,previousCount);
         }
       }
 
@@ -3538,11 +3573,15 @@
       }
       currentDraft = null;
       drawPointerId = null;
+      drawPointerType = null;
       if (e) e.preventDefault();
     };
 
     canvas.onpointerup = finish;
     canvas.onpointercancel = finish;
+    canvas.onlostpointercapture = function(e) {
+      if (currentDraft && drawPointerId === e.pointerId) finish(e);
+    };
     canvas.onpointerleave = function(e) {
       if (e.pointerType === 'mouse' && currentDraft && e.buttons === 0) finish(e);
     };
