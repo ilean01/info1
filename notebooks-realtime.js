@@ -3241,7 +3241,27 @@
         gestureState = null;
         strokeEraseActive = false;
         strokeEraseSeen.clear();
-        if (drawPointerId !== null && drawPointerId !== e.pointerId) {
+        if (drawPointerId !== null && drawPointerId !== e.pointerId && currentDraft) {
+          // Al escribir muy rápido iPadOS puede entregar el siguiente pointerdown
+          // antes de que procesemos el pointerup anterior. Nunca descartamos ese trazo:
+          // lo cerramos y lo guardamos antes de empezar el nuevo.
+          flushPoints();
+          const staleNb = getNotebook(currentNotebookId);
+          const stalePage = getPage(staleNb, currentPageId);
+          if (staleNb && stalePage) {
+            if (!Array.isArray(stalePage.strokes)) stalePage.strokes = [];
+            stalePage.redoStack = [];
+            stalePage.strokes.push(currentDraft);
+            staleNb.updatedAt = new Date().toISOString();
+            broadcast('stroke-final', {
+              notebookId: staleNb.id,
+              pageId: stalePage.id,
+              stroke: currentDraft
+            });
+            try { window.INFO1_STATE_STORAGE.journal(staleNb,stalePage,currentDraft); } catch (_) {}
+            clearTimeout(inkPersistTimer);
+            inkPersistTimer=setTimeout(function(){inkPersistTimer=null;persist();},450);
+          }
           currentDraft = null;
           pointQueue = [];
           clearTimeout(shapeHoldTimer);
@@ -3335,7 +3355,7 @@
     canvas.onpointerdown = handleCanvasPointerDown;
     beginExternalPencilStroke = handleCanvasPointerDown;
 
-    canvas.onpointermove = function(e) {
+    const handlePointerMove = function(e) {
       if (e.pointerType === 'touch' && activePointers.has(e.pointerId)) {
         activePointers.set(e.pointerId, { x:e.clientX, y:e.clientY });
         if (gestureState && (fingerPanMode || activePointers.size >= 2 || readOnly)) {
@@ -3409,7 +3429,7 @@
           const samplePoint = pointFromEvent(sample);
           const last = currentDraft.points[currentDraft.points.length - 1];
           const logicalDistance = last ? Math.hypot((samplePoint.x-last.x)*LOGICAL_WIDTH, samplePoint.y-last.y) : 999;
-          if (logicalDistance < 1.4) return;
+          if (logicalDistance < 0.55) return;
           currentDraft.points.push(samplePoint);
           pointQueue.push(samplePoint);
           added = true;
@@ -3425,6 +3445,10 @@
       if (currentDraft.tool === 'line' || currentDraft.tool === 'shape') requestRedraw();
       e.preventDefault();
     };
+    canvas.onpointermove = handlePointerMove;
+    if ('onpointerrawupdate' in window) {
+      canvas.addEventListener('pointerrawupdate', handlePointerMove, { passive:false });
+    }
 
     const finish = function(e) {
       if (e.pointerType === 'touch' && activePointers.has(e.pointerId)) {
@@ -3468,6 +3492,27 @@
         drawPointerId = null;
         return;
       }
+
+      if (e && Number.isFinite(Number(e.clientX)) && Number.isFinite(Number(e.clientY))) {
+        const endPoint = pointFromEvent(e);
+        if (currentDraft.tool === 'line' || currentDraft.tool === 'shape') {
+          if (currentDraft.shapeData) {
+            currentDraft.points = [currentDraft.points[0], endPoint];
+            currentDraft.shapeData.x2 = endPoint.x;
+            currentDraft.shapeData.y2 = endPoint.y;
+          }
+        } else {
+          const last = currentDraft.points[currentDraft.points.length - 1];
+          const endDistance = last ? Math.hypot((endPoint.x-last.x)*LOGICAL_WIDTH,endPoint.y-last.y) : 999;
+          if (endDistance >= 0.2) {
+            const previousCount=currentDraft.points.length;
+            currentDraft.points.push(endPoint);
+            pointQueue.push(endPoint);
+            drawStrokeIncremental(currentDraft,previousCount);
+          }
+        }
+      }
+
       flushPoints();
       const nbFinish = getNotebook(currentNotebookId);
       const pageFinish = getPage(nbFinish, currentPageId);
