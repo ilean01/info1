@@ -2531,7 +2531,8 @@
   }
 
   function passPencilThroughImage(e) {
-    if (!e || e.pointerType !== 'pen' || typeof beginExternalPencilStroke !== 'function') return false;
+    const drawingPointer = !!e && (e.pointerType === 'pen' || (e.pointerType === 'touch' && !fingerPanMode));
+    if (!drawingPointer || typeof beginExternalPencilStroke !== 'function') return false;
     const layer = document.getElementById('nbImageLayer');
     selectedImageId = null;
     updateImageTools();
