@@ -57,6 +57,8 @@
       '@media(max-width:640px){.nb-writing-dock{grid-template-columns:auto minmax(0,1fr);grid-template-areas:"lib title" "tools tools";top:calc(env(safe-area-inset-top,0px) + 58px)}.nb-writing-dock-main{grid-area:lib}.nb-q-title{grid-area:title}.nb-writing-dock-tools{grid-area:tools;justify-content:space-between}.nb-writing-dock-more{display:none}.nb-writing-dock-tools .nb-qcolor{width:42px;height:42px}.nb-qtool{min-width:43px;min-height:43px}.nb-edge-page-zone{width:34px;opacity:.28}}' +
       '@media(max-height:620px){.nb-writing-dock{position:relative;top:auto}#nbEditorPanel .nb-editor-top{position:relative;top:auto}}';
     style.textContent +=
+      '.nb-fp-width-control{display:flex;align-items:center;gap:7px;color:#475569;font:800 11px system-ui}.nb-fp-width-control input{width:110px;min-width:0;height:36px;margin:0;accent-color:#2458a6;touch-action:none}.nb-fp-width-control output{min-width:24px;text-align:center;font-variant-numeric:tabular-nums}' +
+      '@media(max-width:850px),(orientation:portrait) and (max-width:1100px){.nb-fp-width-control{flex-direction:column;gap:5px}.nb-fp-width-control input{writing-mode:vertical-lr;direction:rtl;width:36px;height:105px}}' +
       'body.'+FULLSCREEN_BODY_CLASS+'{overflow:hidden!important}' +
       '.nb-focus-surface{position:relative;min-width:0;isolation:isolate}' +
       '.nb-focus-surface.'+FULLSCREEN_CLASS+',.nb-focus-surface:fullscreen,.nb-focus-surface:-webkit-full-screen{position:fixed!important;inset:0!important;z-index:2147483000!important;width:100vw!important;height:100dvh!important;max-width:none!important;margin:0!important;padding:0!important;overflow:hidden!important;background:#e8edf5!important;overscroll-behavior:none}' +
@@ -100,6 +102,8 @@
       '@media(max-width:900px){.nb-floating-palette.more-open .nb-fp-drawer{grid-template-columns:repeat(2,minmax(145px,1fr));max-height:62dvh;overflow:auto}.nb-fp-panel{align-content:flex-start}}' +
       '@media(max-width:560px){.nb-floating-palette.more-open .nb-fp-drawer{grid-template-columns:1fr;max-width:calc(100vw - 20px);max-height:68dvh}.nb-fp-panel select{max-width:100%;flex:1}.nb-fp-panel input[type=range]{flex:1}}';
     style.textContent +=
+      '.nb-fp-width-control{display:flex;align-items:center;gap:7px;color:#475569;font:800 11px system-ui}.nb-fp-width-control input{width:110px;min-width:0;height:36px;margin:0;accent-color:#2458a6;touch-action:none}.nb-fp-width-control output{min-width:24px;text-align:center;font-variant-numeric:tabular-nums}' +
+      '@media(max-width:850px),(orientation:portrait) and (max-width:1100px){.nb-fp-width-control{flex-direction:column;gap:5px}.nb-fp-width-control input{writing-mode:vertical-lr;direction:rtl;width:36px;height:105px}}' +
       'body.'+FULLSCREEN_BODY_CLASS+' .nb-fp-exit{display:inline-flex!important}' +
       '.nb-fp-shell{max-height:calc(100dvh - 32px)}.nb-fp-body{min-height:0;flex-shrink:1}' +
       '.nb-floating-palette.more-open .nb-fp-drawer{position:fixed;right:max(90px,env(safe-area-inset-right));top:max(16px,env(safe-area-inset-top));bottom:max(16px,env(safe-area-inset-bottom));max-height:none;width:min(680px,calc(100vw - 110px));max-width:calc(100vw - 110px);overflow:auto;align-content:start}' +
@@ -339,11 +343,7 @@
             '<span class="nb-fp-color custom" title="Otro color"><input data-fpcolor-custom type="color" value="#7c3aed" aria-label="Otro color"></span>'+
           '</div>'+
           '<div class="nb-fp-group">'+
-            '<span class="nb-fp-mini-label">Grosor</span>'+
-            '<button class="nb-fp-width" data-fpwidth="2" style="--fpw:2px" type="button" title="Fino"></button>'+
-            '<button class="nb-fp-width" data-fpwidth="4" style="--fpw:4px" type="button" title="Medio"></button>'+
-            '<button class="nb-fp-width" data-fpwidth="7" style="--fpw:7px" type="button" title="Grueso"></button>'+
-            '<button class="nb-fp-width" data-fpwidth="11" style="--fpw:11px" type="button" title="Muy grueso"></button>'+
+            '<label class="nb-fp-width-control" for="nbFloatingWidth"><span>Grosor</span><input id="nbFloatingWidth" type="range" min="1" max="18" step="0.5" value="4" aria-label="Grosor del lápiz"><output for="nbFloatingWidth" id="nbFloatingWidthValue">4</output></label>'+
           '</div>'+
           '<div class="nb-fp-group">'+
             '<button class="nb-fp-action" data-fpaction="undo" type="button" title="Deshacer">↶</button>'+
@@ -446,7 +446,7 @@
     palette.querySelectorAll('[data-fpcolor]').forEach(el=>el.onclick=()=>setActualColor(el.dataset.fpcolor));
     const custom=palette.querySelector('[data-fpcolor-custom]');
     if(custom)custom.oninput=()=>setActualColor(custom.value);
-    palette.querySelectorAll('[data-fpwidth]').forEach(btn=>btn.onclick=()=>setActualWidth(Number(btn.dataset.fpwidth)));
+    palette.querySelector('#nbFloatingWidth').oninput=e=>setActualWidth(Number(e.target.value));
 
     const actions={
       undo:'nbUndo',redo:'nbRedo',zoomout:'nbZoomOut',zoomreset:'nbZoomLabel',zoomin:'nbZoomIn',
@@ -522,13 +522,11 @@
     if(custom&&color)custom.value=color;
 
     const width=Number((document.getElementById('nbWidth')||{}).value||4);
-    let nearest=null,dist=Infinity;
-    palette.querySelectorAll('[data-fpwidth]').forEach(btn=>{
-      const d=Math.abs(Number(btn.dataset.fpwidth)-width);
-      if(d<dist){dist=d;nearest=btn;}
-      btn.classList.remove('active');
-    });
-    if(nearest)nearest.classList.add('active');
+    const widthSlider=palette.querySelector('#nbFloatingWidth');
+    const widthValue=palette.querySelector('#nbFloatingWidthValue');
+    if(widthSlider && Number(widthSlider.value)!==width)widthSlider.value=String(width);
+    const widthLabel=String(width).replace('.',',');
+    if(widthValue && widthValue.textContent!==widthLabel)widthValue.textContent=widthLabel;
 
     const brush=document.getElementById('nbBrush');
     const pBrush=palette.querySelector('[data-fpselect="brush"]');
@@ -608,7 +606,7 @@
         '<button class="nb-qtool" data-qtool="eraser" type="button" title="Borrador"><span class="ico">🧽</span><span class="txt">Borrar</span></button>'+
         '<button class="nb-qtool" data-qtool="lasso" type="button" title="Lazo"><span class="ico">✂️</span><span class="txt">Lazo</span></button>'+
         '<input class="nb-qcolor" id="nbQuickColor" type="color" aria-label="Color del lápiz">'+
-        '<input class="nb-qwidth" id="nbQuickWidth" type="range" min="1" max="18" value="4" aria-label="Grosor">'+
+        '<input class="nb-qwidth" id="nbQuickWidth" type="range" min="1" max="18" step="0.5" value="4" aria-label="Grosor">'+
         '<button class="nb-qaction" data-qaction="undo" type="button" title="Deshacer">↶</button>'+
         '<button class="nb-qaction" data-qaction="redo" type="button" title="Rehacer">↷</button>'+
         '<button class="nb-qaction" data-qaction="more" type="button" title="Más herramientas">•••</button>'+

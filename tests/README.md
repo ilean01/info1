@@ -5,6 +5,7 @@ With Node.js, Playwright and Python 3 installed:
 ```
 node tests/storage-merge.cjs
 node tests/cloud-races.cjs
+node tests/pencil-width.cjs
 node tests/notebooks-browser.cjs
 ```
 

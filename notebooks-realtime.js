@@ -9,6 +9,7 @@
   const ERASER_MODE_KEY = 'info1-notebook-eraser-mode-v1';
   const PENCIL_MODE_KEY = 'info1-notebook-finger-mode-v1';
   const BRUSH_KEY = 'info1-notebook-brush-v1';
+  const WIDTH_KEY = 'info1-notebook-pen-width-v1';
   const LOGICAL_WIDTH = 1000;
   const INITIAL_PAGE_HEIGHT = 1600;
   const PAGE_GROW_BY = 1200;
@@ -49,6 +50,7 @@
   let strokeEraseSeen = new Set();
   let fingerPanMode = INFO1_LOCAL.getItem(PENCIL_MODE_KEY) !== 'draw';
   let currentBrush = INFO1_LOCAL.getItem(BRUSH_KEY) || 'ballpoint';
+  let currentWidth = clamp(Number(INFO1_LOCAL.getItem(WIDTH_KEY)) || 4, 1, 18);
   let activePointers = new Map();
   let gestureState = null;
   let drawPointerId = null;
@@ -1710,7 +1712,7 @@
           '<option value="stroke">Borrar trazo completo</option>' +
         '</select>' +
         '<input id="nbColor" type="color" value="#16264a" aria-label="Color">' +
-        '<label class="small">Grosor <input id="nbWidth" type="range" min="1" max="18" value="4"></label>' +
+        '<label class="small">Grosor <input id="nbWidth" type="range" min="1" max="18" step="0.5" value="' + currentWidth + '" aria-label="Grosor del lápiz"></label>' +
         '<button id="nbUndo" type="button">↶ Deshacer</button>' +
         '<button id="nbRedo" type="button">↷ Rehacer</button>' +
         '<button id="nbZoomOut" type="button" title="Alejar">−</button>' +
@@ -1828,6 +1830,13 @@
       deletePages.disabled = readOnly;
       deletePages.onclick = deleteSelectedPages;
     }
+
+    const widthInput = document.getElementById('nbWidth');
+    widthInput.value = String(currentWidth);
+    widthInput.oninput = widthInput.onchange = function() {
+      currentWidth = clamp(Number(widthInput.value) || 4, 1, 18);
+      INFO1_LOCAL.setItem(WIDTH_KEY, String(currentWidth));
+    };
 
     let tool = 'pen';
     let shapeType = '';
@@ -3199,7 +3208,7 @@
 
       const startPoint = pointFromEvent(e);
       maybeGrowPage(pageNow, startPoint.y);
-      const width = Number(document.getElementById('nbWidth').value || 4);
+      const width = currentWidth;
       currentDraft = {
         id: uuid(),
         tool: tool,
