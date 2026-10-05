@@ -320,6 +320,7 @@
     const k=scale();
     const box=document.createElement('div');
     box.className='nb-selection-ext-box';
+    box.style.pointerEvents=selectionMode?'auto':'none';
     box.style.left=(b.minX*k)+'px';
     box.style.top=(b.minY*k)+'px';
     box.style.width=(b.width*k)+'px';
@@ -329,7 +330,7 @@
       if (e.target!==box || isReadOnly()) return;
       startTransform(e,'move');
     });
-    if (!isReadOnly()) {
+    if (selectionMode && !isReadOnly()) {
       const resize=document.createElement('span');
       resize.className='nb-selection-ext-handle nb-selection-ext-resize';
       resize.title='Redimensionar';
@@ -350,10 +351,37 @@
     });
   }
 
+  function leaveSelectionForDrawing() {
+    if (!selectionMode && !hasSelection()) return;
+    selectionMode=false;
+    clearSelection(false);
+    const lasso=document.getElementById(TOOL_ID);
+    if (lasso) lasso.classList.remove('active');
+    renderOverlay();
+    highlightImages();
+    updateTools();
+    syncSelectionPresence({cleared:true,lasso:null});
+  }
+
+  function bindDrawingToolExit() {
+    ['nbPen','nbHighlighter','nbLine','nbEraser'].forEach(id => {
+      const el=document.getElementById(id);
+      if (!el || el.dataset.selectionExitBound==='1') return;
+      el.dataset.selectionExitBound='1';
+      el.addEventListener('click',leaveSelectionForDrawing,true);
+    });
+    const shape=document.getElementById('nbShape');
+    if (shape && shape.dataset.selectionExitBound!=='1') {
+      shape.dataset.selectionExitBound='1';
+      shape.addEventListener('change',leaveSelectionForDrawing,true);
+    }
+  }
+
   function ensureUi() {
     if (!isEditorVisible()) return;
     ensureStyles();
     const toolbar=document.querySelector('#nbEditorPanel .nb-toolbar');
+    bindDrawingToolExit();
     if (toolbar && !document.getElementById(TOOL_ID)) {
       const btn=document.createElement('button');
       btn.id=TOOL_ID;
