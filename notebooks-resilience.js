@@ -50,10 +50,10 @@
   }
 
   function deviceId() {
-    let id = localStorage.getItem(DEVICE_KEY);
+    let id = INFO1_LOCAL.getItem(DEVICE_KEY);
     if (!id) {
       id = (crypto && crypto.randomUUID) ? crypto.randomUUID() : 'nb-'+Date.now()+'-'+Math.random().toString(36).slice(2);
-      localStorage.setItem(DEVICE_KEY,id);
+      INFO1_LOCAL.setItem(DEVICE_KEY,id);
     }
     return id;
   }
@@ -79,7 +79,7 @@
   function currentIds() {
     const a=api();
     let open={};
-    try { open=JSON.parse(localStorage.getItem(OPEN_KEY)||'{}')||{}; } catch (_) {}
+    try { open=JSON.parse(INFO1_LOCAL.getItem(OPEN_KEY)||'{}')||{}; } catch (_) {}
     return {notebookId:a && a.current ? a.current : null,pageId:open.pageId||null};
   }
 
@@ -106,18 +106,18 @@
 
   function loadQueue() {
     try {
-      const value=JSON.parse(localStorage.getItem(QUEUE_KEY)||'[]');
+      const value=JSON.parse(INFO1_LOCAL.getItem(QUEUE_KEY)||'[]');
       return Array.isArray(value)?value:[];
     } catch (_) { return []; }
   }
 
   function saveQueue(queue) {
-    try { localStorage.setItem(QUEUE_KEY,JSON.stringify(queue)); queueError=false; } catch (_) { queueError=true; }
+    try { INFO1_LOCAL.setItem(QUEUE_KEY,JSON.stringify(queue)); queueError=false; } catch (_) { queueError=true; }
   }
 
   function loadPendingImagePages() {
     try {
-      const value=JSON.parse(localStorage.getItem(IMAGE_PENDING_KEY)||'[]');
+      const value=JSON.parse(INFO1_LOCAL.getItem(IMAGE_PENDING_KEY)||'[]');
       return new Set(Array.isArray(value)?value:[]);
     } catch (_) { return new Set(); }
   }
@@ -125,7 +125,7 @@
   let pendingImagePages=loadPendingImagePages();
 
   function savePendingImagePages() {
-    try { localStorage.setItem(IMAGE_PENDING_KEY,JSON.stringify(Array.from(pendingImagePages))); } catch (_) {}
+    try { INFO1_LOCAL.setItem(IMAGE_PENDING_KEY,JSON.stringify(Array.from(pendingImagePages))); } catch (_) {}
   }
 
   function durableBaseKind(kind) {
@@ -178,10 +178,12 @@
 
   function statusState() {
     const c=cloud();
+    const storage=window.INFO1_STATE_STORAGE.status();
     const queueLength=loadQueue().length;
     const imagePending=pendingImagePages.size;
-    if (saveError || queueError || window.INFO1_LOCAL_SAVE_OK===false) return {key:'error',text:'● No se pudo guardar · exportá un backup antes de cerrar',queueLength,imagePending};
+    if (storage.error || saveError || queueError || window.INFO1_LOCAL_SAVE_OK===false) return {key:'error',text:'● No se pudo guardar · exportá un backup antes de cerrar',queueLength,imagePending};
     if (window.INFO1_CLOUD?.status?.conflict) return {key:'error',text:'● Conflicto en nube · copia local conservada',queueLength,imagePending};
+    if(storage.pending)return {key:'syncing',text:'● Guardando en este dispositivo…',queueLength,imagePending};
     if (!navigator.onLine || !c.connected) return {key:'offline',text:'● Sin conexión · guardado localmente',queueLength,imagePending};
     if (!ready || !baseReady || flushing || persistDepth>0 || window.INFO1_CLOUD?.status?.dirty || queueLength || imagePending || Date.now()-lastChangeAt<850) {
       return {key:'syncing',text:'● Sincronizando…',queueLength,imagePending};
@@ -308,7 +310,7 @@
 
     syncClient=c.client;
     syncConnecting=true;
-    const thisSyncChannel=c.client.channel(wantedSync,{config:{broadcast:{self:false,ack:false}}})
+    const thisSyncChannel=c.client.channel(wantedSync,{config:{broadcast:{self:false,ack:true}}})
       .on('broadcast',{event:'sync'},msg=>handleSync(msg && msg.payload ? msg.payload : {}));
     syncChannel=thisSyncChannel;
     thisSyncChannel.subscribe(status=>{
@@ -730,6 +732,7 @@
     ensureStatusUi();
     updateStatus();
 
+    window.addEventListener('info1:storage-status',updateStatus);
     window.addEventListener('online',()=>{connect();setTimeout(flushAll,100);updateStatus();});
     window.addEventListener('offline',()=>{disconnectCount++;disconnectChannels();updateStatus();});
     window.addEventListener('info1:workspace-changed',()=>{disconnectChannels();setTimeout(connect,150);});

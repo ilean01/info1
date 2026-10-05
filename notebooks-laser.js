@@ -43,10 +43,10 @@
   function deviceId() {
     const b = bridge();
     if (b && b.deviceId) return b.deviceId();
-    let id = localStorage.getItem(DEVICE_KEY);
+    let id = INFO1_LOCAL.getItem(DEVICE_KEY);
     if (!id) {
       id = uuid();
-      localStorage.setItem(DEVICE_KEY, id);
+      INFO1_LOCAL.setItem(DEVICE_KEY, id);
     }
     return id;
   }
@@ -67,7 +67,7 @@
   }
 
   function openInfo() {
-    try { return JSON.parse(localStorage.getItem(OPEN_KEY) || '{}') || {}; }
+    try { return JSON.parse(INFO1_LOCAL.getItem(OPEN_KEY) || '{}') || {}; }
     catch (_) { return {}; }
   }
 
@@ -83,20 +83,20 @@
   }
 
   function settingMode() {
-    return localStorage.getItem(MODE_KEY) === 'trail' ? 'trail' : 'point';
+    return INFO1_LOCAL.getItem(MODE_KEY) === 'trail' ? 'trail' : 'point';
   }
 
   function settingColor() {
-    const v = localStorage.getItem(COLOR_KEY) || '#ff2d55';
+    const v = INFO1_LOCAL.getItem(COLOR_KEY) || '#ff2d55';
     return /^#[0-9a-f]{6}$/i.test(v) ? v : '#ff2d55';
   }
 
   function settingWidth() {
-    return clamp(Number(localStorage.getItem(WIDTH_KEY)) || 7, 2, 24);
+    return clamp(Number(INFO1_LOCAL.getItem(WIDTH_KEY)) || 7, 2, 24);
   }
 
   function settingPoint() {
-    return clamp(Number(localStorage.getItem(POINT_KEY)) || 22, 8, 72);
+    return clamp(Number(INFO1_LOCAL.getItem(POINT_KEY)) || 22, 8, 72);
   }
 
   function autoReturn() {
@@ -560,10 +560,10 @@
     color.value = settingColor();
     width.value = String(settingWidth());
     point.value = String(settingPoint());
-    mode.onchange = () => localStorage.setItem(MODE_KEY, mode.value === 'trail' ? 'trail' : 'point');
-    color.oninput = () => localStorage.setItem(COLOR_KEY, color.value);
-    width.oninput = () => localStorage.setItem(WIDTH_KEY, String(clamp(Number(width.value) || 7, 2, 24)));
-    point.oninput = () => localStorage.setItem(POINT_KEY, String(clamp(Number(point.value) || 22, 8, 72)));
+    mode.onchange = () => INFO1_LOCAL.setItem(MODE_KEY, mode.value === 'trail' ? 'trail' : 'point');
+    color.oninput = () => INFO1_LOCAL.setItem(COLOR_KEY, color.value);
+    width.oninput = () => INFO1_LOCAL.setItem(WIDTH_KEY, String(clamp(Number(width.value) || 7, 2, 24)));
+    point.oninput = () => INFO1_LOCAL.setItem(POINT_KEY, String(clamp(Number(point.value) || 22, 8, 72)));
   }
 
   function updateStatus() {

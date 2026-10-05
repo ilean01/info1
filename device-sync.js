@@ -41,7 +41,7 @@
   function wait(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
   function localState() {
-    const value = parse(localStorage.getItem(STATE_KEY), {});
+    const value = parse(INFO1_LOCAL.getItem(STATE_KEY), {});
     return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   }
 
@@ -66,30 +66,31 @@
 
   function hasPendingFlag() {
     const cloud = window.INFO1_CLOUD?.status;
-    return !!cloud?.dirty || localStorage.getItem(UNSYNCED_KEY) === '1';
+    return !!cloud?.dirty || INFO1_LOCAL.getItem(UNSYNCED_KEY) === '1';
   }
 
   function hasUnsyncedHumanChanges() {
-    return !!window.INFO1_NOTEBOOKS?.isDrawing || (userTouched && hasPendingFlag());
+    const storage=window.INFO1_STATE_STORAGE?.status();
+    return !!window.INFO1_NOTEBOOKS?.isDrawing || !!storage?.pending || !!storage?.error || (userTouched && hasPendingFlag());
   }
 
   function cloudContext() {
-    const ctx = parse(localStorage.getItem(CLOUD_CTX_KEY), {});
+    const ctx = parse(INFO1_LOCAL.getItem(CLOUD_CTX_KEY), {});
     const status = window.INFO1_CLOUD?.status;
     const workspaceId = ctx?.workspaceId || status?.workspaceId || null;
     return {
       workspaceId,
       userId: ctx?.userId || null,
       connected: !!status?.connected,
-      hydratedRevision: Number(localStorage.getItem(`info1-cloud-hydrated:${workspaceId || ''}`) || 0)
+      hydratedRevision: Number(INFO1_LOCAL.getItem(`info1-cloud-hydrated:${workspaceId || ''}`) || 0)
     };
   }
 
   function deviceId() {
-    let id = localStorage.getItem(DEVICE_ID_KEY);
+    let id = INFO1_LOCAL.getItem(DEVICE_ID_KEY);
     if (!id) {
       id = crypto?.randomUUID?.() || `dev-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      localStorage.setItem(DEVICE_ID_KEY, id);
+      INFO1_LOCAL.setItem(DEVICE_ID_KEY, id);
     }
     return id;
   }
@@ -97,7 +98,7 @@
   function persistAppStateDirectly() {
     try {
       const s = appState();
-      if (s && typeof s === 'object') localStorage.setItem(STATE_KEY, JSON.stringify(s));
+      if (s && typeof s === 'object') INFO1_LOCAL.setItem(STATE_KEY, JSON.stringify(s));
     } catch (e) {
       console.warn('INFO1 persist shared timer:', e);
     }
@@ -178,7 +179,7 @@
     if (!next || typeof next !== 'object' || Array.isArray(next)) return false;
     try {
       if (typeof state === 'undefined' || !state || typeof state !== 'object') return false;
-      const clone = JSON.parse(JSON.stringify(next));
+      const clone = window.INFO1_NOTEBOOK_MERGE.withNotebooks(state,next);
       for (const key of Object.keys(state)) delete state[key];
       Object.assign(state, clone);
       canonicalizeTimerAfterFullState();
@@ -571,9 +572,9 @@
       const info = await r.json();
       const release = String(info?.release || info?.sha || '').trim();
       if (!release) return false;
-      const seen = localStorage.getItem(RELEASE_KEY);
+      const seen = INFO1_LOCAL.getItem(RELEASE_KEY);
       if (!seen) {
-        localStorage.setItem(RELEASE_KEY, release);
+        INFO1_LOCAL.setItem(RELEASE_KEY, release);
         return false;
       }
       if (seen !== release) {
@@ -597,7 +598,7 @@
     if (!appUpdateAvailable || hasUnsyncedHumanChanges()) return false;
     if (hasActiveChrono() && !force) return false;
     window.__INFO1_UPDATING_APP__ = true;
-    if (pendingRelease) localStorage.setItem(RELEASE_KEY, pendingRelease);
+    if (pendingRelease) INFO1_LOCAL.setItem(RELEASE_KEY, pendingRelease);
     const url = new URL(location.href);
     url.searchParams.set('_info1version', Date.now().toString());
     location.replace(url.toString());

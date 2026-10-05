@@ -228,11 +228,11 @@
 
     try {
       const sb = window.INFO1_SUPABASE_CLIENT; const status = window.INFO1_CLOUD?.status || {};
-      const ctx = parse(localStorage.getItem(CLOUD_CTX_KEY), {}) || {};
+      const ctx = parse(INFO1_LOCAL.getItem(CLOUD_CTX_KEY), {}) || {};
       const workspaceId = status.workspaceId || ctx.workspaceId;
       if (!sb || !workspaceId) throw new Error('La nube todavía no está lista.');
-      const local = parse(localStorage.getItem(STATE_KEY), {}) || {};
-      const hydrated = Number(localStorage.getItem(`info1-cloud-hydrated:${workspaceId}`) || 0);
+      const local = parse(INFO1_LOCAL.getItem(STATE_KEY), {}) || {};
+      const hydrated = Number(INFO1_LOCAL.getItem(`info1-cloud-hydrated:${workspaceId}`) || 0);
       const result = await sb.from('info1_state').select('state,revision,updated_at').eq('workspace_id', workspaceId).maybeSingle();
       if (result.error) throw result.error; if (!result.data) throw new Error('No encontré una copia remota.');
       const remote = result.data.state || {};
@@ -240,7 +240,7 @@
       const cloudSummary = summarize(remote,{revision:Number(result.data.revision || 0),updatedAt:result.data.updated_at || '—'});
       const {diffs,truncated} = diffStates(local,remote);
       const diffHtml = diffs.length ? diffs.map(d => `<div class="diff"><div class="diff-path">${esc(d.path)}</div><div><span class="diff-local">Este dispositivo:</span> ${esc(formatValue(d.a))}</div><div><span class="diff-cloud">Supabase:</span> ${esc(formatValue(d.b))}</div></div>`).join('') : '<div class="muted">No encontré diferencias de contenido.</div>';
-      const pending = localStorage.getItem(UNSYNCED_KEY) === '1' || status.dirty;
+      const pending = INFO1_LOCAL.getItem(UNSYNCED_KEY) === '1' || status.dirty;
       overlay.querySelector('.cmp-card').innerHTML = `<div class="cmp-head"><div><h2>👀 Comparar versiones</h2><div class="muted">Mirá ambas copias antes de decidir cuál conservar.</div></div><button class="close" id="info1CmpX">✕</button></div><div class="safe">🔒 No se cambia ni se borra nada mientras estás mirando. Recién se modifica algo cuando elegís uno de los dos botones de abajo.</div><div class="cmp-grid">${versionHtml('💻 Este dispositivo','local',localSummary,pending?'Tiene cambios locales pendientes o detectados.':'Sin cambios locales pendientes detectados.')}${versionHtml('☁️ Supabase','cloud',cloudSummary,`Copia remota actual · revisión ${cloudSummary.revision}`)}</div><details ${diffs.length < 18 ? 'open' : ''}><summary>Ver diferencias concretas (${diffs.length}${truncated?'+':''})</summary><div class="diffs">${diffHtml}${truncated?'<div class="muted">Se muestran las primeras 80 diferencias para que la vista siga siendo rápida.</div>':''}</div></details><div class="cmp-actions"><button class="use-local" id="info1CmpUseLocal">💻 Usar este dispositivo</button><button class="use-cloud" id="info1CmpUseCloud">☁️ Usar Supabase</button><button class="close" id="info1CmpClose">Cerrar sin decidir</button></div>`;
       overlay.querySelector('#info1CmpX').onclick = closeCompare;
       overlay.querySelector('#info1CmpClose').onclick = closeCompare;
@@ -279,7 +279,7 @@
     const badge = document.getElementById('info1CloudBadge');
     if (!badge) return;
     const status = window.INFO1_CLOUD?.status || {};
-    const ctx = parse(localStorage.getItem(CLOUD_CTX_KEY), {}) || {};
+    const ctx = parse(INFO1_LOCAL.getItem(CLOUD_CTX_KEY), {}) || {};
     const workspaceId = status.workspaceId || ctx.workspaceId || '';
 
     let box = badge.querySelector('#info1WorkspaceCodeBox');

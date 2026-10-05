@@ -33,18 +33,18 @@
   }
 
   function readCloudContext() {
-    try { return JSON.parse(localStorage.getItem(CLOUD_CTX_KEY) || 'null'); }
+    try { return JSON.parse(INFO1_LOCAL.getItem(CLOUD_CTX_KEY) || 'null'); }
     catch { return null; }
   }
 
   function saveCloudContext(workspaceId, userId) {
     try {
-      localStorage.setItem(CLOUD_CTX_KEY, JSON.stringify({workspaceId,userId,updatedAt:new Date().toISOString()}));
+      INFO1_LOCAL.setItem(CLOUD_CTX_KEY, JSON.stringify({workspaceId,userId,updatedAt:new Date().toISOString()}));
     } catch {}
   }
 
   async function resolveCloudContext() {
-    if (localStorage.getItem(OFFLINE_KEY) === '1') return null;
+    if (INFO1_LOCAL.getItem(OFFLINE_KEY) === '1') return null;
     const sb = window.INFO1_SUPABASE_CLIENT;
     if (!sb) return null;
 

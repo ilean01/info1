@@ -1,0 +1,26 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),{spawn}=require('node:child_process'),path=require('node:path');
+const {chromium}=require('playwright');
+const clone=x=>JSON.parse(JSON.stringify(x));
+const ctx={window:{},sessionStorage:{getItem(){},setItem(){}},crypto:require('node:crypto').webcrypto};vm.createContext(ctx);vm.runInContext(fs.readFileSync(path.join(__dirname,'../notebook-merge.js'),'utf8'),ctx);const M=ctx.window.INFO1_NOTEBOOK_MERGE;
+const original={notebooks:{n:{id:'n',title:'Test',pages:[{id:'p',strokes:[{id:'s',points:[1]}],images:[]}]}},order:['n'],folders:{}};
+M.adopt({notebooks:{}});M.stamp(original);const old=clone(original),local=clone(original);M.adopt(local);local.notebooks.n.pages[0].strokes.push({id:'new',points:[2]});M.stamp(local);
+assert.equal(M.stores(local,old).notebooks.n.pages[0].strokes.length,2);
+local.notebooks.n.pages[0].strokes=local.notebooks.n.pages[0].strokes.filter(s=>s.id!=='s');M.stamp(local);
+assert.deepEqual(Array.from(M.stores(local,old).notebooks.n.pages[0].strokes,s=>s.id),['new']);
+local.notebooks.n.pages[0].strokes.push(old.notebooks.n.pages[0].strokes[0]);M.stamp(local);assert.equal(M.stores(local,old).notebooks.n.pages[0].strokes.length,2);
+const merged=M.state({a:0,b:0},{a:1,b:0},{a:0,b:2});assert.equal(merged.value.a,1);assert.equal(merged.value.b,2);assert.equal(merged.conflicts.length,0);assert.equal(M.state({a:0},{a:1},{a:2}).conflicts.length,1);
+console.log('PASS stale snapshots, deletion tombstones, redo and independent study changes');
+(async()=>{const server=spawn('python3',['-m','http.server','8770'],{cwd:path.resolve(__dirname,'..'),stdio:'ignore'});await new Promise(r=>setTimeout(r,300));const browser=await chromium.launch({executablePath:process.env.INFO1_TEST_CHROME,args:['--no-sandbox','--use-gl=angle','--use-angle=swiftshader']});try{
+ const page=await browser.newPage();await page.route('**/storage-test',r=>r.fulfill({contentType:'text/html',body:'<!doctype html><body>Storage regression</body>'}));await page.goto('http://127.0.0.1:8770/storage-test');
+ await page.evaluate(()=>{const data={__notebooksV1:{notebooks:{n:{id:'n',pages:[{id:'p',strokes:[],images:[]}]}},order:['n'],mediaAssets:{a:{id:'a',dataUrl:'data:'+ 'a'.repeat(1200000)}}}};localStorage.setItem('info1-study-center-v4-priority',JSON.stringify(data));});
+ const load=async()=>{await page.addScriptTag({url:'/notebook-merge.js'});await page.addScriptTag({url:'/state-storage.js'});await page.evaluate(()=>INFO1_STATE_STORAGE.ready);};await load();
+ assert.equal(await page.evaluate(()=>localStorage.getItem('info1-study-center-v4-priority')),null);
+ assert.equal(await page.evaluate(()=>JSON.parse(INFO1_STATE_STORAGE.raw).__notebooksV1.mediaAssets.a.dataUrl.length),1200005);
+ await page.evaluate(()=>{const n=JSON.parse(INFO1_STATE_STORAGE.raw).__notebooksV1.notebooks.n;INFO1_STATE_STORAGE.journal(n,n.pages[0],{id:'recovered',points:[{x:.2,y:30}]});});
+ await page.reload();await load();assert.equal(await page.evaluate(()=>JSON.parse(INFO1_STATE_STORAGE.raw).__notebooksV1.notebooks.n.pages[0].strokes[0].id),'recovered');
+ console.log('PASS large legacy state migration, asset reload and crash journal recovery');
+ await page.evaluate(async()=>{const put=IDBObjectStore.prototype.put;IDBObjectStore.prototype.put=function(){throw new DOMException('Cuota simulada','QuotaExceededError');};INFO1_LOCAL.setItem('info1-study-center-v4-priority',INFO1_STATE_STORAGE.raw);try{await INFO1_STATE_STORAGE.flush();}catch{}await new Promise(r=>setTimeout(r,20));IDBObjectStore.prototype.put=put;});
+ assert(await page.evaluate(()=>!!INFO1_STATE_STORAGE.status().error));
+ await page.evaluate(async()=>{INFO1_LOCAL.setItem('info1-study-center-v4-priority',INFO1_STATE_STORAGE.raw);await INFO1_STATE_STORAGE.flush();});
+ assert.equal(await page.evaluate(()=>INFO1_STATE_STORAGE.status().error),null);console.log('PASS storage failure is reported and retry succeeds');
+ }finally{await browser.close();server.kill();}})().catch(e=>{console.error(e);process.exit(1)});

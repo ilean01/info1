@@ -99,6 +99,13 @@
       '.nb-fp-selection-actions,.nb-fp-image-actions{display:none}.nb-floating-palette.has-selection .nb-fp-selection-actions,.nb-floating-palette.has-image .nb-fp-image-actions{display:flex}' +
       '@media(max-width:900px){.nb-floating-palette.more-open .nb-fp-drawer{grid-template-columns:repeat(2,minmax(145px,1fr));max-height:62dvh;overflow:auto}.nb-fp-panel{align-content:flex-start}}' +
       '@media(max-width:560px){.nb-floating-palette.more-open .nb-fp-drawer{grid-template-columns:1fr;max-width:calc(100vw - 20px);max-height:68dvh}.nb-fp-panel select{max-width:100%;flex:1}.nb-fp-panel input[type=range]{flex:1}}';
+    style.textContent +=
+      'body.'+FULLSCREEN_BODY_CLASS+' .nb-fp-exit{display:inline-flex!important}' +
+      '.nb-fp-shell{max-height:calc(100dvh - 32px)}.nb-fp-body{min-height:0;flex-shrink:1}' +
+      '.nb-floating-palette.more-open .nb-fp-drawer{position:fixed;right:max(90px,env(safe-area-inset-right));top:max(16px,env(safe-area-inset-top));bottom:max(16px,env(safe-area-inset-bottom));max-height:none;width:min(680px,calc(100vw - 110px));max-width:calc(100vw - 110px);overflow:auto;align-content:start}' +
+      '#nbAlwaysExit{display:none;position:fixed;left:max(12px,env(safe-area-inset-left));top:max(12px,env(safe-area-inset-top));z-index:2147483002;border:1px solid #bdc9db;border-radius:12px;background:#fff;color:#172033;padding:12px 16px;font:800 14px system-ui;box-shadow:0 4px 15px #0002}' +
+      'body.'+FULLSCREEN_BODY_CLASS+' #nbAlwaysExit{display:block}' +
+      '@media(max-width:560px){.nb-floating-palette.more-open .nb-fp-drawer{right:65px;width:calc(100vw - 80px);max-width:calc(100vw - 80px);grid-template-columns:minmax(0,1fr)}.nb-fp-panel{overflow-wrap:anywhere}}';
     document.head.appendChild(style);
   }
 
@@ -261,22 +268,22 @@
   }
 
   function paletteOpen(){
-    return localStorage.getItem(FLOATING_PALETTE_KEY)!=='0';
+    return INFO1_LOCAL.getItem(FLOATING_PALETTE_KEY)!=='0';
   }
 
   function paletteMoreOpen(){
-    return localStorage.getItem(FLOATING_MORE_KEY)==='1';
+    return INFO1_LOCAL.getItem(FLOATING_MORE_KEY)==='1';
   }
 
   function setPaletteMoreOpen(open){
-    localStorage.setItem(FLOATING_MORE_KEY,open?'1':'0');
+    INFO1_LOCAL.setItem(FLOATING_MORE_KEY,open?'1':'0');
     const palette=document.getElementById(FLOATING_PALETTE_ID);
     if(palette)palette.classList.toggle('more-open',!!open);
     syncFloatingPalette();
   }
 
   function setPaletteOpen(open){
-    localStorage.setItem(FLOATING_PALETTE_KEY,open?'1':'0');
+    INFO1_LOCAL.setItem(FLOATING_PALETTE_KEY,open?'1':'0');
     const palette=document.getElementById(FLOATING_PALETTE_ID);
     if(palette)palette.classList.toggle('collapsed',!open);
     if(!open)setPaletteMoreOpen(false);
@@ -640,7 +647,7 @@
   }
 
   function defaultAdvancedOpen(){
-    const saved=localStorage.getItem(ADVANCED_KEY);
+    const saved=INFO1_LOCAL.getItem(ADVANCED_KEY);
     if(saved==='1')return true;
     if(saved==='0')return false;
     return !isCoarse()&&window.innerWidth>1024;
@@ -735,7 +742,7 @@
   function bindThreeFingerGesture(scroller){
     if(scroller.dataset.nbGestureBound==='1')return;
     scroller.dataset.nbGestureBound='1';
-    const enabled=()=>localStorage.getItem(GESTURE_KEY)!=='0';
+    const enabled=()=>INFO1_LOCAL.getItem(GESTURE_KEY)!=='0';
     scroller.addEventListener('pointerdown',e=>{
       if(!enabled()||e.pointerType!=='touch')return;
       gesturePointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
@@ -835,6 +842,7 @@
 
   function boot(){
     installStyles();
+    const exit=document.createElement('button');exit.id='nbAlwaysExit';exit.type='button';exit.textContent='⤡ Salir';exit.setAttribute('aria-label','Salir de pantalla completa');exit.onclick=exitFullscreenMode;document.body.appendChild(exit);
     bindViewport();
     bindKeyboardNavigation();
     const onFsChange=()=>{if(fullscreenWanted())repairFullscreenState();syncFullscreenButton();syncFloatingPalette();setTimeout(()=>{adjustPagerForKeyboard();window.dispatchEvent(new Event('resize'));},40);};
@@ -876,7 +884,7 @@
       repairFullscreen:repairFullscreenState,
       showTools:()=>setPaletteOpen(true),
       hideTools:()=>setPaletteOpen(false),
-      setGestures:enabled=>localStorage.setItem(GESTURE_KEY,enabled?'1':'0')
+      setGestures:enabled=>INFO1_LOCAL.setItem(GESTURE_KEY,enabled?'1':'0')
     };
   }
 

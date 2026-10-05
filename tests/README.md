@@ -1,13 +1,23 @@
-# Browser regression check
+# Regression checks
 
-With Node.js and Playwright installed, run `node tests/notebooks-browser.cjs`.
+With Node.js, Playwright and Python 3 installed:
+
+```
+node tests/storage-merge.cjs
+node tests/cloud-races.cjs
+node tests/notebooks-browser.cjs
+```
+
 Set `INFO1_TEST_CHROME` to use an existing Chromium executable.
-Python 3 serves the app on local port 8769 during the test.
+The suites serve local ports 8770, 8771 and 8769 respectively.
 
-The suite uses two independent browser contexts and a deterministic Supabase
-transport, including the SDK's single-subscription constraint. It covers screen
-navigation, live in-progress strokes, simultaneous drawing, received-state
-persistence, page creation, failed sends, concurrent queue appends, storage quota
-errors, mutation observer loops, and an offline PWA reload. It never authenticates
-or changes production user data. It does not replace a real tablet/stylus or live
-Supabase end-to-end check.
+Coverage: large-state IndexedDB migration, atomic storage failure and retry,
+crash recovery journal, stale snapshots, deletion/redo, cloud revision races,
+edits during upload/download, 52 navigation combinations, live ink between two
+independent browser contexts, concurrent strokes, received-state persistence,
+page creation, offline queue replay, persistent laser, iPad-size fullscreen exit,
+offline PWA boot and previously opened PDF access.
+
+Cloud tests use deterministic transports. They never authenticate or alter
+production user data. Chromium viewport tests do not replace physical Safari,
+Apple Pencil, iPadOS suspension or live Supabase end-to-end checks.

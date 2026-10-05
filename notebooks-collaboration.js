@@ -32,8 +32,8 @@
   function deviceId(){
     const b=bridge();
     if(b&&b.deviceId) return b.deviceId();
-    let id=localStorage.getItem(DEVICE_KEY);
-    if(!id){ id=(crypto&&crypto.randomUUID)?crypto.randomUUID():'nb-'+Date.now()+'-'+Math.random().toString(36).slice(2); localStorage.setItem(DEVICE_KEY,id); }
+    let id=INFO1_LOCAL.getItem(DEVICE_KEY);
+    if(!id){ id=(crypto&&crypto.randomUUID)?crypto.randomUUID():'nb-'+Date.now()+'-'+Math.random().toString(36).slice(2); INFO1_LOCAL.setItem(DEVICE_KEY,id); }
     return id;
   }
 
@@ -47,7 +47,7 @@
   }
 
   function openInfo(){
-    try{return JSON.parse(localStorage.getItem(OPEN_KEY)||'{}')||{};}catch(_){return{};}
+    try{return JSON.parse(INFO1_LOCAL.getItem(OPEN_KEY)||'{}')||{};}catch(_){return{};}
   }
 
   function currentIds(){
@@ -56,7 +56,7 @@
   }
 
   function inferName(){
-    const saved=localStorage.getItem(NAME_KEY);
+    const saved=INFO1_LOCAL.getItem(NAME_KEY);
     if(saved) return saved;
     const cloudName=window.INFO1_CLOUD?.status?.displayName;
     if(cloudName){
@@ -65,7 +65,7 @@
       return String(cloudName);
     }
     try{
-      const s=JSON.parse(localStorage.getItem(STATE_KEY)||'{}')||{};
+      const s=JSON.parse(INFO1_LOCAL.getItem(STATE_KEY)||'{}')||{};
       const p=s.__settings&&s.__settings.p2Profile;
       if(p==='elias') return 'Elías';
       if(p==='ile') return 'Ile';
@@ -73,7 +73,7 @@
     return 'Ile';
   }
 
-  function displayName(){ return localStorage.getItem(NAME_KEY)||inferName(); }
+  function displayName(){ return INFO1_LOCAL.getItem(NAME_KEY)||inferName(); }
 
   function deviceLabel(){
     const ua=navigator.userAgent||'';
@@ -105,7 +105,7 @@
 
   function currentMode(){
     if(isBaseReadOnly()) return 'observe';
-    return localStorage.getItem(MODE_KEY)==='observe'?'observe':'edit';
+    return INFO1_LOCAL.getItem(MODE_KEY)==='observe'?'observe':'edit';
   }
 
   function presencePayload(){
@@ -235,7 +235,7 @@
         if(next==='Otro'){
           next=prompt('Nombre que querés mostrar en el cuaderno:',displayName())||displayName();
         }
-        localStorage.setItem(NAME_KEY,next);
+        INFO1_LOCAL.setItem(NAME_KEY,next);
         nameSel.value=['Ile','Elías'].includes(next)?next:'Otro';
         refreshPresence(true);renderPeople();renderAuthors();
       };
@@ -245,8 +245,8 @@
       modeSel.onchange=()=>setMode(modeSel.value);
 
       document.getElementById('nbShowAuthors').onclick=()=>{
-        const next=localStorage.getItem(AUTHORS_KEY)!=='1';
-        localStorage.setItem(AUTHORS_KEY,next?'1':'0');
+        const next=INFO1_LOCAL.getItem(AUTHORS_KEY)!=='1';
+        INFO1_LOCAL.setItem(AUTHORS_KEY,next?'1':'0');
         renderAuthors();updateAuthorsButton();
       };
     }
@@ -260,13 +260,13 @@
 
   function updateAuthorsButton(){
     const b=document.getElementById('nbShowAuthors');if(!b)return;
-    const on=localStorage.getItem(AUTHORS_KEY)==='1';
+    const on=INFO1_LOCAL.getItem(AUTHORS_KEY)==='1';
     b.classList.toggle('active',on);b.textContent=on?'🎨 Autores: sí':'🎨 Autores';
   }
 
   function setMode(mode){
     mode=mode==='observe'?'observe':'edit';
-    localStorage.setItem(MODE_KEY,mode);
+    INFO1_LOCAL.setItem(MODE_KEY,mode);
     const a=api(),ids=currentIds();
     if(a&&ids.notebookId&&a.open){
       a.open(ids.notebookId,ids.pageId,mode==='observe',false);
@@ -319,11 +319,11 @@
   }
 
   function liveActivityHidden(){
-    return localStorage.getItem(LIVE_ACTIVITY_HIDDEN_KEY)==='1';
+    return INFO1_LOCAL.getItem(LIVE_ACTIVITY_HIDDEN_KEY)==='1';
   }
 
   function setLiveActivityHidden(hidden){
-    localStorage.setItem(LIVE_ACTIVITY_HIDDEN_KEY,hidden?'1':'0');
+    INFO1_LOCAL.setItem(LIVE_ACTIVITY_HIDDEN_KEY,hidden?'1':'0');
     renderGlobalActivity();
   }
 
@@ -434,7 +434,7 @@
     const root=document.getElementById('nbAuthorLayer'),stage=document.getElementById('nbCanvasStage'),b=bridge();
     if(!root||!stage||!b||!b.currentPage)return;
     root.innerHTML='';
-    if(localStorage.getItem(AUTHORS_KEY)!=='1')return;
+    if(INFO1_LOCAL.getItem(AUTHORS_KEY)!=='1')return;
     const page=b.currentPage();if(!page)return;
     const k=Math.max(.001,stage.getBoundingClientRect().width/LOGICAL_WIDTH);
     let count=0;

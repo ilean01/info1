@@ -53,8 +53,15 @@
     catch { return fallback; }
   }
 
+  function cloudBase(){return parse(INFO1_LOCAL.getItem('info1-cloud-base:'+workspace?.id),{});}
+  function rememberBase(value){INFO1_LOCAL.setItem('info1-cloud-base:'+workspace.id,JSON.stringify(value));}
+  function applyMerged(value){
+    writePrimaryState(JSON.stringify(value));
+    window.INFO1_APPLY_REMOTE_STATE?.(value,{source:'merged-cloud-state'});
+  }
+
   function localRaw() {
-    return localStorage.getItem(KEY) || '';
+    return INFO1_LOCAL.getItem(KEY) || '';
   }
 
   function localState() {
@@ -107,7 +114,7 @@
 
   function writePrimaryState(raw) {
     try {
-      localStorage.setItem(KEY, raw);
+      INFO1_LOCAL.setItem(KEY, raw);
       window.INFO1_LOCAL_SAVE_OK = true;
       return true;
     } catch (error) {
@@ -115,9 +122,9 @@
 
       // Las versiones anteriores guardaban una copia completa adicional en
       // localStorage. En iPad eso puede ocupar casi el doble y agotar la cuota.
-      try { localStorage.removeItem(RECOVERY_KEY); } catch {}
+      try { INFO1_LOCAL.removeItem(RECOVERY_KEY); } catch {}
       try {
-        localStorage.setItem(KEY, raw);
+        INFO1_LOCAL.setItem(KEY, raw);
         window.INFO1_LOCAL_SAVE_OK = true;
         return true;
       } catch (retryError) {
@@ -158,8 +165,8 @@
 
     let localPreferred = null;
     try {
-      localPreferred = localStorage.getItem(ACTIVE_WORKSPACE_KEY) ||
-        parse(localStorage.getItem(CLOUD_CTX_KEY), {})?.workspaceId || null;
+      localPreferred = INFO1_LOCAL.getItem(ACTIVE_WORKSPACE_KEY) ||
+        parse(INFO1_LOCAL.getItem(CLOUD_CTX_KEY), {})?.workspaceId || null;
     } catch (_) {}
 
     return serverPreferred || localPreferred || null;
@@ -167,7 +174,7 @@
 
   function persistWorkspacePreference(workspaceId) {
     if (!workspaceId || !session?.user) return;
-    try { localStorage.setItem(ACTIVE_WORKSPACE_KEY, workspaceId); } catch {}
+    try { INFO1_LOCAL.setItem(ACTIVE_WORKSPACE_KEY, workspaceId); } catch {}
     if (session.user.user_metadata?.info1_workspace_id === workspaceId) return;
 
     Promise.resolve(
@@ -217,12 +224,12 @@
   function setContext() {
     if (!session?.user?.id || !workspace?.id) return;
     try {
-      localStorage.setItem(CLOUD_CTX_KEY, JSON.stringify({
+      INFO1_LOCAL.setItem(CLOUD_CTX_KEY, JSON.stringify({
         workspaceId: workspace.id,
         userId: session.user.id,
         updatedAt: new Date().toISOString()
       }));
-      localStorage.setItem(ACTIVE_WORKSPACE_KEY, workspace.id);
+      INFO1_LOCAL.setItem(ACTIVE_WORKSPACE_KEY, workspace.id);
     } catch {}
     window.INFO1_SUPABASE_CLIENT = sb;
     window.INFO1_CLOUD_READY = true;
@@ -236,7 +243,7 @@
   function clearContext() {
     window.INFO1_SUPABASE_CLIENT = null;
     window.INFO1_CLOUD_READY = false;
-    try { localStorage.removeItem(CLOUD_CTX_KEY); } catch {}
+    try { INFO1_LOCAL.removeItem(CLOUD_CTX_KEY); } catch {}
     try {
       window.dispatchEvent(new CustomEvent('info1:workspace-changed', {
         detail: { workspaceId: null }
@@ -344,7 +351,7 @@
           msg.textContent = 'Cuenta creada. Revisá tu correo si Supabase pide confirmación.';
           return;
         }
-        localStorage.removeItem(OFFLINE_KEY);
+        INFO1_LOCAL.removeItem(OFFLINE_KEY);
         overlay.remove();
         await initCloud(result.data.session);
       } catch (e) {
@@ -516,11 +523,12 @@
   }
 
   async function createRemoteFromLocal() {
+    const initial=localState(),initialRaw=JSON.stringify(initial);
     const result = await withTimeout(
       sb.from('info1_state')
         .insert({
           workspace_id: workspace.id,
-          state: localState(),
+          state: initial,
           revision: 1,
           updated_by: session.user.id
         })
@@ -529,10 +537,12 @@
       10000
     );
     if (result.error) throw result.error;
+    rememberBase(initial);
     remoteRevision = Number(result.data?.revision || 1);
-    localStorage.setItem(`${HYDRATED_PREFIX}${workspace.id}`, String(remoteRevision));
-    localStorage.removeItem(UNSYNCED_KEY);
-    dirty = false;
+    INFO1_LOCAL.setItem(`${HYDRATED_PREFIX}${workspace.id}`, String(remoteRevision));
+    INFO1_LOCAL.removeItem(UNSYNCED_KEY);
+    dirty = localRaw()!==initialRaw;
+    if(dirty){INFO1_LOCAL.setItem(UNSYNCED_KEY,'1');setTimeout(pushLocal,100);}
     conflict = false;
     lastSeenRaw = localRaw();
     showSyncedBadge();
@@ -548,16 +558,21 @@
     remoteRevision = Number(remote.revision || 1);
     const remoteRaw = JSON.stringify(normalState(remote.state));
     const here = localRaw();
+    if(!window.INFO1_WAS_LOCAL_STATE){await loadCloudIntoLocal(false);return;}
 
     if (remoteRaw === here || (!here && remoteRaw === '{}')) {
-      localStorage.setItem(`${HYDRATED_PREFIX}${workspace.id}`, String(remoteRevision));
-      localStorage.removeItem(UNSYNCED_KEY);
+      INFO1_LOCAL.setItem(`${HYDRATED_PREFIX}${workspace.id}`, String(remoteRevision));
+      INFO1_LOCAL.removeItem(UNSYNCED_KEY);
       dirty = false;
       conflict = false;
       lastSeenRaw = here;
+      rememberBase(normalState(remote.state));
       showSyncedBadge();
       return;
     }
+
+    const base=cloudBase();
+    if(Object.keys(base).length){const merged=window.INFO1_NOTEBOOK_MERGE.state(base,localState(),normalState(remote.state));if(!merged.conflicts.length){applyMerged(merged.value);rememberBase(normalState(remote.state));dirty=true;conflict=false;setTimeout(pushLocal,100);return;}}
 
     // Antes se aplicaba la nube automáticamente durante el arranque. Ese era
     // el punto más peligroso: podía disparar renders, save(), recargas y más
@@ -568,12 +583,14 @@
   async function loadCloudIntoLocal(userInitiated = false) {
     if (!session || !workspace) return;
     try {
+      const atStart=localState();
       if (userInitiated) badge('☁️ Leyendo la copia de Supabase…', 'warn');
       const remote = await readRemote();
       if (!remote) throw new Error('Todavía no hay una copia en Supabase.');
+      if(!userInitiated && Number(remote.revision||0)<remoteRevision)return false;
 
-      const next = normalState(remote.state);
-      const nextRaw = JSON.stringify(next);
+      let next = window.INFO1_NOTEBOOK_MERGE.withNotebooks(localState(),normalState(remote.state));
+      let nextRaw = JSON.stringify(next);
       const oldRaw = localRaw();
 
       applyingRemote = true;
@@ -582,11 +599,15 @@
         // localStorage en Safari/iPadOS. No duplicamos el estado gigante.
         await saveRecoveryIndexedDb(oldRaw);
       }
-      try { localStorage.removeItem(RECOVERY_KEY); } catch {}
+      try { INFO1_LOCAL.removeItem(RECOVERY_KEY); } catch {}
+      // Preserve edits made while the network read or recovery backup awaited.
+      const duringRead=window.INFO1_NOTEBOOK_MERGE.state(atStart,localState(),next);
+      next=duringRead.value;nextRaw=JSON.stringify(next);
       writePrimaryState(nextRaw);
+      rememberBase(normalState(remote.state));
       remoteRevision = Number(remote.revision || 1);
-      localStorage.setItem(`${HYDRATED_PREFIX}${workspace.id}`, String(remoteRevision));
-      localStorage.removeItem(UNSYNCED_KEY);
+      INFO1_LOCAL.setItem(`${HYDRATED_PREFIX}${workspace.id}`, String(remoteRevision));
+      INFO1_LOCAL.removeItem(UNSYNCED_KEY);
       dirty = false;
       conflict = false;
       lastSeenRaw = nextRaw;
@@ -606,6 +627,7 @@
         console.warn('INFO1 live state apply:', e);
       }
 
+      if(nextRaw!==JSON.stringify(normalState(remote.state))){dirty=true;INFO1_LOCAL.setItem(UNSYNCED_KEY,'1');setTimeout(pushLocal,100);}
       if (!userInitiated) {
         showSyncedBadge(`☁️ Actualizado automáticamente · rev ${remoteRevision}`);
         return appliedLive;
@@ -617,6 +639,7 @@
         '<button id="info1ImportBackup">Importar backup</button>'
       );
       bindStandardActions();
+      if(nextRaw!==JSON.stringify(normalState(remote.state))){dirty=true;INFO1_LOCAL.setItem(UNSYNCED_KEY,'1');setTimeout(pushLocal,100);}
       return true;
     } catch (e) {
       applyingRemote = false;
@@ -641,13 +664,15 @@
       const current = await readRemote();
       const rev = Number(current?.revision || 0);
       const nextRevision = rev + 1;
+      const manualCandidate=window.INFO1_NOTEBOOK_MERGE.withNotebooks(normalState(current?.state),localState());
+      const manualBefore=localRaw();
 
       let result;
       if (current) {
         result = await withTimeout(
           sb.from('info1_state')
             .update({
-              state: localState(),
+              state: manualCandidate,
               revision: nextRevision,
               updated_by: session.user.id,
               updated_at: new Date().toISOString()
@@ -663,7 +688,7 @@
           sb.from('info1_state')
             .insert({
               workspace_id: workspace.id,
-              state: localState(),
+              state: manualCandidate,
               revision: 1,
               updated_by: session.user.id
             })
@@ -677,10 +702,13 @@
       if (!result.data) throw new Error('La nube cambió al mismo tiempo. Volvé a elegir qué copia usar.');
 
       remoteRevision = Number(result.data.revision || nextRevision || 1);
-      localStorage.setItem(`${HYDRATED_PREFIX}${workspace.id}`, String(remoteRevision));
-      localStorage.removeItem(UNSYNCED_KEY);
+      INFO1_LOCAL.setItem(`${HYDRATED_PREFIX}${workspace.id}`, String(remoteRevision));
+      INFO1_LOCAL.removeItem(UNSYNCED_KEY);
       conflict = false;
-      dirty = false;
+      rememberBase(manualCandidate);
+      dirty = localRaw()!==manualBefore;
+      if(!dirty)applyMerged(manualCandidate);
+      else {INFO1_LOCAL.setItem(UNSYNCED_KEY,'1');setTimeout(pushLocal,100);}
       lastSeenRaw = localRaw();
       showSyncedBadge('☁️ Este dispositivo quedó como copia activa · rev ' + remoteRevision);
     } catch (e) {
@@ -693,82 +721,33 @@
 
   async function pushLocal() {
     if (!dirty || busy || conflict || applyingRemote || !session || !workspace) return;
-    busy = true;
+    busy=true;
     try {
-      const hereRaw = localRaw();
-      const current = await readRemote();
-      const rev = Number(current?.revision || 0);
-      const remoteRaw = current ? JSON.stringify(normalState(current.state)) : '';
-
-      if (current && remoteRaw === hereRaw) {
-        remoteRevision = rev;
-        dirty = false;
-        localStorage.removeItem(UNSYNCED_KEY);
-        localStorage.setItem(`${HYDRATED_PREFIX}${workspace.id}`, String(remoteRevision));
-        showSyncedBadge();
-        return;
+      for(let attempt=0;attempt<3;attempt++) {
+        const current=await readRemote(), rev=Number(current?.revision||0);
+        const here=localState(), beforeRaw=JSON.stringify(here);
+        let candidate=here;
+        if(current&&remoteRevision&&rev!==remoteRevision) {
+          const result=window.INFO1_NOTEBOOK_MERGE.state(cloudBase(),here,normalState(current.state));
+          if(result.conflicts.length){conflict=true;showConflictBadge('☁️ Hay cambios distintos en la misma ficha. Los cuadernos y la copia local se conservan.');return;}
+          candidate=result.value;
+        }
+        const sentRaw=JSON.stringify(candidate);
+        let result;
+        if(current)result=await withTimeout(sb.from('info1_state').update({state:candidate,revision:rev+1,updated_by:session.user.id,updated_at:new Date().toISOString()}).eq('workspace_id',workspace.id).eq('revision',rev).select('revision').maybeSingle(),10000);
+        else result=await withTimeout(sb.from('info1_state').insert({workspace_id:workspace.id,state:candidate,revision:1,updated_by:session.user.id}).select('revision').single(),10000);
+        if(result.error)throw result.error;
+        if(!result.data)continue;
+        remoteRevision=Number(result.data.revision||rev+1);
+        rememberBase(candidate);
+        // An edit made while the request was in flight must remain dirty.
+        if(localRaw()===beforeRaw){if(sentRaw!==beforeRaw)applyMerged(candidate);dirty=false;INFO1_LOCAL.removeItem(UNSYNCED_KEY);}
+        else {const later=window.INFO1_NOTEBOOK_MERGE.state(here,localState(),candidate);applyMerged(later.value);dirty=true;INFO1_LOCAL.setItem(UNSYNCED_KEY,'1');}
+        lastSeenRaw=localRaw();INFO1_LOCAL.setItem(`${HYDRATED_PREFIX}${workspace.id}`,String(remoteRevision));showSyncedBadge();return;
       }
-
-      // Si la revisión remota avanzó desde nuestra última base conocida, no
-      // hacemos merge automático ni sobrescribimos. Se frena y se pregunta.
-      if (current && remoteRevision && rev !== remoteRevision) {
-        conflict = true;
-        showConflictBadge(`☁️ Hay cambios nuevos en Supabase (rev ${rev}). Tu copia local sigue intacta.`);
-        return;
-      }
-
-      let result;
-      if (current) {
-        result = await withTimeout(
-          sb.from('info1_state')
-            .update({
-              state: localState(),
-              revision: rev + 1,
-              updated_by: session.user.id,
-              updated_at: new Date().toISOString()
-            })
-            .eq('workspace_id', workspace.id)
-            .eq('revision', rev)
-            .select('revision')
-            .maybeSingle(),
-          10000
-        );
-      } else {
-        result = await withTimeout(
-          sb.from('info1_state')
-            .insert({
-              workspace_id: workspace.id,
-              state: localState(),
-              revision: 1,
-              updated_by: session.user.id
-            })
-            .select('revision')
-            .single(),
-          10000
-        );
-      }
-
-      if (result.error) throw result.error;
-      if (!result.data) {
-        conflict = true;
-        showConflictBadge('☁️ La nube cambió mientras guardaba. No se sobrescribió nada.');
-        return;
-      }
-
-      remoteRevision = Number(result.data.revision || rev + 1 || 1);
-      dirty = false;
-      localStorage.removeItem(UNSYNCED_KEY);
-      localStorage.setItem(`${HYDRATED_PREFIX}${workspace.id}`, String(remoteRevision));
-      lastSeenRaw = localRaw();
-      showSyncedBadge();
-    } catch (e) {
-      // Un error de red nunca bloquea la aplicación ni borra el estado local.
-      dirty = true;
-      badge(`☁️ Sin sincronizar por ahora · ${e?.message || 'error de red'}`, 'bad', '<button id="info1PullCloud">Cargar nube</button>');
-      bindStandardActions();
-    } finally {
-      busy = false;
-    }
+      dirty=true;badge('☁️ Reintentando guardar los cambios…','warn');
+    }catch(e){dirty=true;badge('☁️ Pendiente de sincronizar · '+(e?.message||'sin conexión'),'warn');}
+    finally {busy=false;if(dirty&&!conflict) {clearTimeout(pushTimer);pushTimer=setTimeout(pushLocal,1500);}}
   }
 
   function startMonitoring() {
@@ -781,7 +760,7 @@
       if (now === lastSeenRaw) return;
       lastSeenRaw = now;
       dirty = true;
-      localStorage.setItem(UNSYNCED_KEY, '1');
+      INFO1_LOCAL.setItem(UNSYNCED_KEY, '1');
 
       if (conflict) return;
       clearTimeout(pushTimer);
@@ -811,11 +790,11 @@
         if (dirty || changedHere) {
           if (changedHere) {
             dirty = true;
-            localStorage.setItem(UNSYNCED_KEY, '1');
+            INFO1_LOCAL.setItem(UNSYNCED_KEY, '1');
           }
-          conflict = true;
+          dirty=true;
           clearTimeout(pushTimer);
-          showConflictBadge(`☁️ Otro dispositivo guardó cambios (rev ${rev}) mientras este también tenía cambios locales. Elegí qué copia usar.`);
+          pushTimer=setTimeout(pushLocal,100);
           return;
         }
 
@@ -905,7 +884,7 @@
     // El arranque de la nube nunca debe bloquear el render de la app.
     await wait(350);
 
-    if (localStorage.getItem(OFFLINE_KEY) === '1') {
+    if (INFO1_LOCAL.getItem(OFFLINE_KEY) === '1') {
       showLocalBadge('💾 Solo local · nube desactivada');
       return;
     }

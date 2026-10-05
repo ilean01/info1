@@ -1,7 +1,13 @@
-const CACHE = 'info1-pwa-network-first-v10';
+const CACHE = 'info1-pwa-network-first-v11';
 const APP_SHELL = [
   './',
   './index.html',
+  './app-bootstrap.js',
+  './vendor/supabase-2.117.2.js',
+  './app-core.js',
+  './app-study.js',
+  './notebook-merge.js',
+  './state-storage.js',
   './manifest.webmanifest',
   './supabase-config.js',
   './cloud-sync.js',
@@ -21,7 +27,7 @@ const APP_SHELL = [
 self.addEventListener('install', event => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE);
-    await Promise.allSettled(APP_SHELL.map(url => cache.add(url)));
+    await Promise.all(APP_SHELL.map(url => cache.add(url)));
     await self.skipWaiting();
   })());
 });
@@ -53,11 +59,15 @@ self.addEventListener('fetch', event => {
 
   if (url.pathname.includes('/materiales/')) {
     event.respondWith((async () => {
-      try { return await fetch(req, { cache: 'no-store' }); }
-      catch (_) {
-        const cached = await caches.match(req) || (APP_SHELL.some(path => new URL(path, self.registration.scope).pathname === url.pathname) ? await caches.match(req, {ignoreSearch:true}) : null);
-        if (cached) return cached;
-        throw _;
+      const fullRequest = new Request(req.url, {credentials:'same-origin'});
+      try {
+        const fresh = await fetch(fullRequest, {cache:'no-store'});
+        if(fresh.ok){const cache=await caches.open(CACHE);await cache.put(fullRequest,fresh.clone());}
+        return fresh;
+      } catch (error) {
+        const cached = await caches.match(fullRequest);
+        if(cached)return cached;
+        throw error;
       }
     })());
     return;

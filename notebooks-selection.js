@@ -36,7 +36,7 @@
   }
 
   function readOpen() {
-    try { return JSON.parse(localStorage.getItem(OPEN_KEY) || '{}') || {}; }
+    try { return JSON.parse(INFO1_LOCAL.getItem(OPEN_KEY) || '{}') || {}; }
     catch (_) { return {}; }
   }
 

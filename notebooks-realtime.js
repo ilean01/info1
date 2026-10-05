@@ -22,7 +22,7 @@
   let currentNotebookId = null;
   let currentPageId = null;
   let readOnly = false;
-  let followMode = localStorage.getItem(FOLLOW_KEY) === '1';
+  let followMode = INFO1_LOCAL.getItem(FOLLOW_KEY) === '1';
   let channel = null;
   let channelName = null;
   let channelClient = null;
@@ -40,15 +40,15 @@
   let libraryTopicFilter = 'all';
   let libraryDateFilter = '';
   let librarySort = 'recent';
-  let libraryViewMode = localStorage.getItem('info1-notebook-library-view-v1') === 'list' ? 'list' : 'grid';
+  let libraryViewMode = INFO1_LOCAL.getItem('info1-notebook-library-view-v1') === 'list' ? 'list' : 'grid';
   let touchDrag = null;
   let pageSelection = new Set();
   let touchPageDrag = null;
-  let eraserMode = localStorage.getItem(ERASER_MODE_KEY) === 'stroke' ? 'stroke' : 'pixel';
+  let eraserMode = INFO1_LOCAL.getItem(ERASER_MODE_KEY) === 'stroke' ? 'stroke' : 'pixel';
   let strokeEraseActive = false;
   let strokeEraseSeen = new Set();
-  let fingerPanMode = localStorage.getItem(PENCIL_MODE_KEY) !== 'draw';
-  let currentBrush = localStorage.getItem(BRUSH_KEY) || 'ballpoint';
+  let fingerPanMode = INFO1_LOCAL.getItem(PENCIL_MODE_KEY) !== 'draw';
+  let currentBrush = INFO1_LOCAL.getItem(BRUSH_KEY) || 'ballpoint';
   let activePointers = new Map();
   let gestureState = null;
   let drawPointerId = null;
@@ -75,10 +75,10 @@
   }
 
   function deviceId() {
-    let id = localStorage.getItem(DEVICE_KEY);
+    let id = INFO1_LOCAL.getItem(DEVICE_KEY);
     if (!id) {
       id = uuid();
-      localStorage.setItem(DEVICE_KEY, id);
+      INFO1_LOCAL.setItem(DEVICE_KEY, id);
     }
     return id;
   }
@@ -88,7 +88,7 @@
       if (typeof state !== 'undefined' && state && typeof state === 'object') return state;
     } catch (_) {}
     try {
-      const value = JSON.parse(localStorage.getItem(STATE_KEY) || '{}');
+      const value = JSON.parse(INFO1_LOCAL.getItem(STATE_KEY) || '{}');
       return value && typeof value === 'object' ? value : {};
     } catch (_) {
       return {};
@@ -193,6 +193,7 @@
 
   function persist() {
     const s = appState();
+    window.INFO1_NOTEBOOK_MERGE.stamp(s[STORE_KEY]);
     let saved = true;
     if (s[STORE_KEY]) s[STORE_KEY].updatedAt = new Date().toISOString();
     try {
@@ -203,7 +204,7 @@
         save();
         saved = window.INFO1_LOCAL_SAVE_OK !== false;
       } else {
-        localStorage.setItem(STATE_KEY, JSON.stringify(s));
+        INFO1_LOCAL.setItem(STATE_KEY, JSON.stringify(s));
       }
     } catch (e) {
       saved = false;
@@ -1513,7 +1514,7 @@
       gridBtn.classList.toggle('active', libraryViewMode === 'grid');
       gridBtn.onclick = function() {
         libraryViewMode = 'grid';
-        localStorage.setItem('info1-notebook-library-view-v1', 'grid');
+        INFO1_LOCAL.setItem('info1-notebook-library-view-v1', 'grid');
         renderNotebookList();
       };
     }
@@ -1521,7 +1522,7 @@
       listBtn.classList.toggle('active', libraryViewMode === 'list');
       listBtn.onclick = function() {
         libraryViewMode = 'list';
-        localStorage.setItem('info1-notebook-library-view-v1', 'list');
+        INFO1_LOCAL.setItem('info1-notebook-library-view-v1', 'list');
         renderNotebookList();
       };
     }
@@ -1647,7 +1648,7 @@
     const page = getPage(nb, pageId);
     currentPageId = page ? page.id : null;
     readOnly = !!remoteReadOnly || followMode;
-    localStorage.setItem(OPEN_KEY, JSON.stringify({ notebookId: id, pageId: currentPageId }));
+    INFO1_LOCAL.setItem(OPEN_KEY, JSON.stringify({ notebookId: id, pageId: currentPageId }));
     openNotebookView();
     const list = document.getElementById('nbListPanel');
     const editor = document.getElementById('nbEditorPanel');
@@ -1773,7 +1774,7 @@
     document.getElementById('nbMode').onclick = function() {
       if (followMode) {
         followMode = false;
-        localStorage.setItem(FOLLOW_KEY, '0');
+        INFO1_LOCAL.setItem(FOLLOW_KEY, '0');
       }
       readOnly = !readOnly;
       renderEditor();
@@ -1843,7 +1844,7 @@
       brushSelect.value = ['ballpoint','fountain','pencil'].includes(currentBrush) ? currentBrush : 'ballpoint';
       brushSelect.onchange = function() {
         currentBrush = brushSelect.value;
-        localStorage.setItem(BRUSH_KEY, currentBrush);
+        INFO1_LOCAL.setItem(BRUSH_KEY, currentBrush);
         selectTool('pen');
       };
     }
@@ -1851,7 +1852,7 @@
       eraserModeSelect.value = eraserMode;
       eraserModeSelect.onchange = function() {
         eraserMode = eraserModeSelect.value === 'stroke' ? 'stroke' : 'pixel';
-        localStorage.setItem(ERASER_MODE_KEY, eraserMode);
+        INFO1_LOCAL.setItem(ERASER_MODE_KEY, eraserMode);
         selectTool('eraser');
         flashStatus(eraserMode === 'stroke' ? '🧽 Borrador por trazos' : '🧽 Borrador libre');
       };
@@ -1865,7 +1866,7 @@
     updateFingerButton();
     if (fingerModeBtn) fingerModeBtn.onclick = function() {
       fingerPanMode = !fingerPanMode;
-      localStorage.setItem(PENCIL_MODE_KEY, fingerPanMode ? 'pan' : 'draw');
+      INFO1_LOCAL.setItem(PENCIL_MODE_KEY, fingerPanMode ? 'pan' : 'draw');
       updateFingerButton();
       flashStatus(fingerPanMode ? '☝️ Dedo mueve · Pencil escribe' : '✍️ Dedo también dibuja');
     };
@@ -1936,7 +1937,7 @@
     if (!next) return;
     currentPageId = next.id;
     selectedImageId = null;
-    localStorage.setItem(OPEN_KEY, JSON.stringify({ notebookId: nb.id, pageId: currentPageId }));
+    INFO1_LOCAL.setItem(OPEN_KEY, JSON.stringify({ notebookId: nb.id, pageId: currentPageId }));
     applyCanvasGeometry(next);
     restorePageViewport(next);
     renderPages();
@@ -3377,8 +3378,10 @@
           pageId: pageFinish.id,
           stroke: currentDraft
         });
+        try { window.INFO1_STATE_STORAGE.journal(nbFinish,pageFinish,currentDraft); }
+        catch(error){window.INFO1_LOCAL_SAVE_OK=false;console.warn('INFO1: no se pudo guardar la recuperación del trazo',error);}
         clearTimeout(inkPersistTimer);
-        inkPersistTimer = setTimeout(persist, 450);
+        inkPersistTimer = setTimeout(function(){inkPersistTimer=null;persist();}, 450);
         clearTimeout(inkRefreshTimer);
         inkRefreshTimer = setTimeout(function() {
           refreshPageManagerPreviews();
@@ -3592,7 +3595,7 @@
 
   function setFollowMode(enabled) {
     followMode = !!enabled;
-    localStorage.setItem(FOLLOW_KEY, followMode ? '1' : '0');
+    INFO1_LOCAL.setItem(FOLLOW_KEY, followMode ? '1' : '0');
     updateFollowButton();
     flashStatus(followMode ? '👀 Siguiendo la pizarra compartida en vivo' : '✍️ Dejaste de seguir la otra pantalla');
     if (followMode && currentNotebookId) {
@@ -3654,7 +3657,7 @@
     channelName = desired;
     channelClient = sb;
     channelConnecting = true;
-    const thisChannel = sb.channel(desired, { config: { broadcast: { self: false, ack: false } } })
+    const thisChannel = sb.channel(desired, { config: { broadcast: { self: false, ack: true } } })
       .on('broadcast', { event: 'nb' }, function(msg) {
         handleRemote(msg && msg.payload ? msg.payload : {});
       });
@@ -3700,6 +3703,14 @@
   }
 
   function broadcast(kind, payload) {
+    const transient=['focus','snapshot-request','stroke-start','stroke-points'];
+    if(!transient.includes(kind)) {
+      window.INFO1_NOTEBOOK_MERGE.stamp(ensureStore());
+      payload=Object.assign({},payload,{_v:window.INFO1_NOTEBOOK_MERGE.version()});
+      const nb=ensureStore().notebooks[payload.notebookId];
+      if(kind==='pages-replaced'&&nb)payload.deletedPages=nb._deletedPages||{};
+      if(kind==='page-cleared'&&nb)payload.strokeIds=Object.keys(getPage(nb,payload.pageId)?._deletedStrokes||{});
+    }
     const body = Object.assign({
       kind,
       deviceId: deviceId(),
@@ -3744,11 +3755,39 @@
 
   function handleRemote(m) {
     if (!m || m.deviceId === deviceId()) return;
+    const transient=['focus','snapshot-request','stroke-start','stroke-points'];
+    // Finish local ink before a remote structural update rebuilds the canvas.
+    if(currentDraft && ['snapshot','pages-replaced','page-deleted','notebook-deleted'].includes(m.kind) && canvas?.onpointerup)
+      canvas.onpointerup({pointerId:drawPointerId,pointerType:'pen',preventDefault(){}});
+    if(!transient.includes(m.kind))window.INFO1_NOTEBOOK_MERGE.stamp(ensureStore());
+    const targetNb=ensureStore().notebooks[m.notebookId];
+    const targetPage=targetNb?.pages?.find(p=>p.id===m.pageId);
+    const incomingVersion=m._v||String(Number(m.at)||0).padStart(16,'0')+':'+(m.deviceId||'legacy');
+    m={...m,_v:incomingVersion};
+    const nid=m.notebookId||m.notebook?.id;
+    const removedNotebook=ensureStore()._deletedNotebooks?.[nid];
+    if(removedNotebook && incomingVersion<=removedNotebook)return;
+    if(m.kind==='notebook-created' && removedNotebook && (m.notebook._v||'')<=removedNotebook)return;
+    if(['notebook-deleted','notebook-renamed','notebook-favorite','notebook-folder'].includes(m.kind) && incomingVersion<(targetNb?._v||''))return;
+    const pid=m.pageId||m.page?.id;
+    if(pid && targetNb?._deletedPages?.[pid] && incomingVersion<=targetNb._deletedPages[pid])return;
+    if(m.kind==='page-deleted' && incomingVersion<(targetPage?._v||''))return;
+    if(m.kind==='stroke-delete' && Array.isArray(m.strokeIds))m.strokeIds=m.strokeIds.filter(id=>incomingVersion>=(targetPage?.strokes?.find(x=>x.id===id)?._v||''));
+    if(m.stroke?.id||m.strokeId){
+      const id=m.stroke?.id||m.strokeId;
+      const known=targetPage?.strokes?.find(x=>x.id===id)?._v||'';
+      const deleted=targetPage?._deletedStrokes?.[id]||'';
+      if(incomingVersion < known || incomingVersion <= deleted)return;
+    }
     applyRemote(m);
+    if(!transient.includes(m.kind)) {
+      if(['snapshot','pages-replaced'].includes(m.kind))window.INFO1_NOTEBOOK_MERGE.adopt(ensureStore());
+      else window.INFO1_NOTEBOOK_MERGE.stamp(ensureStore(),incomingVersion);
+    }
     if (!['focus','snapshot-request','stroke-start','stroke-points'].includes(m.kind)) {
       try {
         if (window.INFO1_CLOUD?.cacheRealtimeState) window.INFO1_CLOUD.cacheRealtimeState(appState());
-        else localStorage.setItem(STATE_KEY, JSON.stringify(appState()));
+        else INFO1_LOCAL.setItem(STATE_KEY, JSON.stringify(appState()));
       } catch (error) {
         window.INFO1_NOTEBOOK_RESILIENCE?.onPersistEnd(false);
         console.warn('INFO1 cuadernos: no se pudo guardar el cambio recibido', error);
@@ -3816,7 +3855,8 @@
     }
 
     if (m.kind === 'snapshot' && m.notebook && m.notebook.id) {
-      store.notebooks[m.notebook.id] = m.notebook;
+      if(store._deletedNotebooks?.[m.notebook.id] && (!m.notebook._v || m.notebook._v<=store._deletedNotebooks[m.notebook.id]))return;
+      store.notebooks[m.notebook.id] = window.INFO1_NOTEBOOK_MERGE.notebook(store.notebooks[m.notebook.id],m.notebook);
       if (!store.order.includes(m.notebook.id)) store.order.unshift(m.notebook.id);
       renderNotebookList();
       if (followMode || currentNotebookId === m.notebook.id) openNotebook(m.notebook.id, currentPageId || (m.notebook.pages[0] && m.notebook.pages[0].id), followMode || readOnly, false);
@@ -3833,6 +3873,7 @@
     }
 
     if (m.kind === 'notebook-deleted') {
+      store._deletedNotebooks??={};store._deletedNotebooks[m.notebookId]=m._v;
       delete store.notebooks[m.notebookId];
       store.order = store.order.filter(function(id) { return id !== m.notebookId; });
       if (currentNotebookId === m.notebookId) showList();
@@ -3912,7 +3953,8 @@
     }
 
     if (m.kind === 'pages-replaced' && Array.isArray(m.pages)) {
-      nb.pages = JSON.parse(JSON.stringify(m.pages));
+      const merged=window.INFO1_NOTEBOOK_MERGE.notebook(nb,{...nb,pages:m.pages,_deletedPages:m.deletedPages||{}});
+      nb.pages=merged.pages;nb._deletedPages=merged._deletedPages;
       if (!nb.pages.length) nb.pages = [blankPage('Página 1')];
       nb.updatedAt = new Date().toISOString();
       if (currentNotebookId === nb.id) {
@@ -3926,7 +3968,7 @@
     }
 
     if (m.kind === 'page-layout') {
-      const layoutPage = getPage(nb, m.pageId);
+      const layoutPage = nb.pages?.find(p=>p.id===m.pageId);
       if (layoutPage) {
         if (Number.isFinite(Number(m.height))) layoutPage.height = Math.max(INITIAL_PAGE_HEIGHT, Number(m.height));
         if (Number.isFinite(Number(m.zoom))) layoutPage.zoom = clamp(Number(m.zoom), MIN_ZOOM, MAX_ZOOM);
@@ -3946,6 +3988,7 @@
     }
 
     if (m.kind === 'page-deleted') {
+      nb._deletedPages??={};nb._deletedPages[m.pageId]=m._v;
       nb.pages = (nb.pages || []).filter(function(p) { return p.id !== m.pageId; });
       if (currentNotebookId === nb.id && currentPageId === m.pageId) {
         currentPageId = nb.pages[0] ? nb.pages[0].id : null;
@@ -3954,7 +3997,7 @@
       return;
     }
 
-    const page = getPage(nb, m.pageId);
+    const page = nb.pages?.find(p=>p.id===m.pageId);
     if (!page) return;
     if (!Array.isArray(page.strokes)) page.strokes = [];
 
@@ -4016,6 +4059,7 @@
     }
 
     if (m.kind === 'stroke-delete' && Array.isArray(m.strokeIds)) {
+      page._deletedStrokes??={};for(const id of m.strokeIds)page._deletedStrokes[id]=[page._deletedStrokes[id]||'',m._v].sort().pop();
       const ids = new Set(m.strokeIds);
       page.strokes = page.strokes.filter(function(s) { return !ids.has(s.id); });
       nb.updatedAt = new Date().toISOString();
@@ -4026,6 +4070,7 @@
     }
 
     if (m.kind === 'undo') {
+      page._deletedStrokes??={};page._deletedStrokes[m.strokeId]=m._v;
       page.strokes = page.strokes.filter(function(s) { return s.id !== m.strokeId; });
       redraw();
       refreshPageManagerPreviews();
@@ -4034,7 +4079,9 @@
     }
 
     if (m.kind === 'page-cleared') {
-      page.strokes = [];
+      const ids=new Set(m.strokeIds || page.strokes.filter(x=>(x._v||'')<=(m._v||'')).map(x=>x.id));
+      page._deletedStrokes??={};for(const id of ids)page._deletedStrokes[id]=[page._deletedStrokes[id]||'',m._v].sort().pop();
+      page.strokes = page.strokes.filter(x=>!ids.has(x.id) || (x._v||'')>(m._v||''));
       page.redoStack = [];
       redraw();
       refreshPageManagerPreviews();
@@ -4147,6 +4194,13 @@
     observeApp();
     updateFollowButton();
     connectRealtime();
+    window.INFO1_NOTEBOOK_MERGE.adopt(ensureStore());
+    const flushInk=()=>{
+      if(currentDraft&&canvas?.onpointerup)canvas.onpointerup({pointerId:drawPointerId,pointerType:'pen',preventDefault(){}});
+      if(inkPersistTimer){clearTimeout(inkPersistTimer);inkPersistTimer=null;persist();}
+    };
+    window.addEventListener('pagehide',flushInk);
+    document.addEventListener('visibilitychange',()=>{if(document.hidden)flushInk();});
     setInterval(connectRealtime, 1200);
     setInterval(updateCloudStatus, 1200);
     window.addEventListener('info1:workspace-changed', function() {
@@ -4164,6 +4218,7 @@
     openFromHash();
     window.addEventListener('hashchange', openFromHash);
     window.addEventListener('info1:remote-state-applied', function() {
+      window.INFO1_NOTEBOOK_MERGE.adopt(ensureStore());
       renderNotebookList();
       if (currentNotebookId && !currentDraft) {
         if (getNotebook(currentNotebookId)) renderEditor();
