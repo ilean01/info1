@@ -22,6 +22,7 @@
   let persistDepth = 0;
   let saveError = false;
   let settleTimer = null;
+  let statusUpdateTimer = null;
   let lastChangeAt = 0;
   let lastSavedAt = 0;
   let lastSentAt = 0;
@@ -156,11 +157,19 @@
     updateStatus();
   }
 
+  function scheduleStatusUpdate(delay=90) {
+    if(statusUpdateTimer) return;
+    statusUpdateTimer=setTimeout(()=>{
+      statusUpdateTimer=null;
+      updateStatus();
+    },Math.max(40,delay));
+  }
+
   function markChanged() {
     lastChangeAt=Date.now();
     clearTimeout(settleTimer);
-    settleTimer=setTimeout(()=>{ lastSavedAt=Date.now(); updateStatus(); },850);
-    updateStatus();
+    settleTimer=setTimeout(()=>{ lastSavedAt=Date.now(); scheduleStatusUpdate(40); },850);
+    scheduleStatusUpdate(90);
   }
 
   function onPersistStart() {
