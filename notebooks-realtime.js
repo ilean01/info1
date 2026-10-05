@@ -2530,6 +2530,29 @@
     window.addEventListener('pointercancel',end,true);
   }
 
+  function passPencilThroughImage(e) {
+    if (!e || e.pointerType !== 'pen' || typeof beginExternalPencilStroke !== 'function') return false;
+    const layer = document.getElementById('nbImageLayer');
+    selectedImageId = null;
+    updateImageTools();
+    if (layer) layer.style.pointerEvents = 'none';
+
+    const pointerId = e.pointerId;
+    const restore = function(ev) {
+      if (ev.pointerId !== pointerId) return;
+      window.removeEventListener('pointerup', restore);
+      window.removeEventListener('pointercancel', restore);
+      if (layer) layer.style.pointerEvents = '';
+      renderImageLayer();
+    };
+    window.addEventListener('pointerup', restore);
+    window.addEventListener('pointercancel', restore);
+
+    beginExternalPencilStroke(e);
+    e.stopPropagation();
+    return true;
+  }
+
   function renderImageLayer() {
     const page = getPage(getNotebook(currentNotebookId), currentPageId);
     const layer = document.getElementById('nbImageLayer');
@@ -2566,16 +2589,17 @@
         const resize = document.createElement('span');
         resize.className = 'nb-image-handle nb-image-resize';
         resize.title = 'Cambiar tamaño';
-        resize.onpointerdown = function(e){ startImageResize(e,image,el); };
+        resize.onpointerdown = function(e){ if (passPencilThroughImage(e)) return; startImageResize(e,image,el); };
         el.appendChild(resize);
         const rotate = document.createElement('span');
         rotate.className = 'nb-image-handle nb-image-rotate';
         rotate.title = 'Rotar';
-        rotate.onpointerdown = function(e){ startImageRotate(e,image,el); };
+        rotate.onpointerdown = function(e){ if (passPencilThroughImage(e)) return; startImageRotate(e,image,el); };
         el.appendChild(rotate);
       }
       applyImageStyle(el,image,scale);
       el.onpointerdown = function(e) {
+        if (passPencilThroughImage(e)) return;
         if (e.target && e.target.classList && e.target.classList.contains('nb-image-handle')) return;
         selectedImageId = image.id;
         renderImageLayer();
