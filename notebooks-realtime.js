@@ -70,6 +70,7 @@
   let inkPersistTimer = null;
   let inkPersistMaxTimer = null;
   let inkRefreshTimer = null;
+  let remoteCacheTimer = null;
   let pencilDetected = false;
   let redrawFrame = 0;
   let lastViewportPaintY = null;
@@ -3889,9 +3890,28 @@
     }
   }
 
+
+  function scheduleRemoteStateCache(delay) {
+    clearTimeout(remoteCacheTimer);
+    remoteCacheTimer=setTimeout(function() {
+      remoteCacheTimer=null;
+      try {
+        if (window.INFO1_CLOUD?.cacheRealtimeState) window.INFO1_CLOUD.cacheRealtimeState(appState());
+        else INFO1_LOCAL.setItem(STATE_KEY, JSON.stringify(appState()));
+      } catch (error) {
+        window.INFO1_NOTEBOOK_RESILIENCE?.onPersistEnd(false);
+        console.warn('INFO1 cuadernos: no se pudo guardar el cambio recibido', error);
+      }
+    }, Math.max(80, Number(delay)||500));
+  }
+
   function broadcast(kind, payload) {
     const transient=['focus','snapshot-request','stroke-start','stroke-points'];
-    if(!transient.includes(kind)) {
+    if(kind==='stroke-final') {
+      const v=window.INFO1_NOTEBOOK_MERGE.version();
+      if(payload?.stroke) payload.stroke._v=v;
+      payload=Object.assign({},payload,{_v:v});
+    } else if(!transient.includes(kind)) {
       window.INFO1_NOTEBOOK_MERGE.stamp(ensureStore());
       payload=Object.assign({},payload,{_v:window.INFO1_NOTEBOOK_MERGE.version()});
       const nb=ensureStore().notebooks[payload.notebookId];
@@ -3946,11 +3966,13 @@
     // Finish local ink before a remote structural update rebuilds the canvas.
     if(currentDraft && ['snapshot','pages-replaced','page-deleted','notebook-deleted'].includes(m.kind) && canvas?.onpointerup)
       canvas.onpointerup({pointerId:drawPointerId,pointerType:'pen',preventDefault(){}});
-    if(!transient.includes(m.kind))window.INFO1_NOTEBOOK_MERGE.stamp(ensureStore());
+    const fastInkFinal=m.kind==='stroke-final';
+    if(!transient.includes(m.kind) && !fastInkFinal) window.INFO1_NOTEBOOK_MERGE.stamp(ensureStore());
     const targetNb=ensureStore().notebooks[m.notebookId];
     const targetPage=targetNb?.pages?.find(p=>p.id===m.pageId);
     const incomingVersion=m._v||String(Number(m.at)||0).padStart(16,'0')+':'+(m.deviceId||'legacy');
     m={...m,_v:incomingVersion};
+    if(fastInkFinal && m.stroke) m.stroke._v=incomingVersion;
     const nid=m.notebookId||m.notebook?.id;
     const removedNotebook=ensureStore()._deletedNotebooks?.[nid];
     if(removedNotebook && incomingVersion<=removedNotebook)return;
@@ -3967,18 +3989,12 @@
       if(incomingVersion < known || incomingVersion <= deleted)return;
     }
     applyRemote(m);
-    if(!transient.includes(m.kind)) {
+    if(!transient.includes(m.kind) && !fastInkFinal) {
       if(['snapshot','pages-replaced'].includes(m.kind))window.INFO1_NOTEBOOK_MERGE.adopt(ensureStore());
       else window.INFO1_NOTEBOOK_MERGE.stamp(ensureStore(),incomingVersion);
     }
     if (!['focus','snapshot-request','stroke-start','stroke-points'].includes(m.kind)) {
-      try {
-        if (window.INFO1_CLOUD?.cacheRealtimeState) window.INFO1_CLOUD.cacheRealtimeState(appState());
-        else INFO1_LOCAL.setItem(STATE_KEY, JSON.stringify(appState()));
-      } catch (error) {
-        window.INFO1_NOTEBOOK_RESILIENCE?.onPersistEnd(false);
-        console.warn('INFO1 cuadernos: no se pudo guardar el cambio recibido', error);
-      }
+      scheduleRemoteStateCache(fastInkFinal ? 650 : 120);
     }
   }
 
@@ -4190,9 +4206,10 @@
 
     if (m.kind === 'stroke-start' && m.stroke) {
       const key = nb.id + ':' + page.id + ':' + m.stroke.id;
-      remoteDrafts.set(key, JSON.parse(JSON.stringify(m.stroke)));
+      const draft=JSON.parse(JSON.stringify(m.stroke));
+      remoteDrafts.set(key,draft);
       if (followMode && (currentNotebookId !== nb.id || currentPageId !== page.id)) openNotebook(nb.id, page.id, true, false);
-      redraw();
+      if(currentNotebookId===nb.id && currentPageId===page.id) drawStroke(draft);
       return;
     }
 
@@ -4200,23 +4217,28 @@
       const key = nb.id + ':' + page.id + ':' + m.strokeId;
       const draft = remoteDrafts.get(key);
       if (draft && Array.isArray(m.points)) {
+        const previousCount=draft.points.length;
         draft.points.push.apply(draft.points, m.points);
-        redraw();
+        if(currentNotebookId===nb.id && currentPageId===page.id) drawStrokeIncremental(draft,previousCount);
       }
       return;
     }
 
     if (m.kind === 'stroke-final' && m.stroke && m.stroke.id) {
       const key = nb.id + ':' + page.id + ':' + m.stroke.id;
+      const hadDraft=remoteDrafts.has(key);
       remoteDrafts.delete(key);
       const index = page.strokes.findIndex(function(s) { return s.id === m.stroke.id; });
       if (index >= 0) page.strokes[index] = JSON.parse(JSON.stringify(m.stroke));
       else page.strokes.push(JSON.parse(JSON.stringify(m.stroke)));
       page.redoStack = [];
       nb.updatedAt = new Date().toISOString();
-      redraw();
-      refreshPageManagerPreviews();
-      renderNotebookList();
+      if(!hadDraft && currentNotebookId===nb.id && currentPageId===page.id) drawStroke(m.stroke);
+      clearTimeout(inkRefreshTimer);
+      inkRefreshTimer=setTimeout(function(){
+        refreshPageManagerPreviews();
+        renderNotebookList();
+      },700);
       return;
     }
 
