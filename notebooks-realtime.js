@@ -1085,7 +1085,7 @@
       '.nb-grid.list .nb-card{grid-template-columns:190px minmax(0,1fr);align-items:center}.nb-grid.list .nb-cover{grid-row:1/span 3}.nb-grid.list .nb-card-info{align-self:stretch}.nb-grid.list .row{grid-column:2}.nb-grid.list .nb-cover{aspect-ratio:1.48/1}@media(max-width:650px){.nb-grid.list .nb-card{grid-template-columns:118px minmax(0,1fr)}.nb-grid.list .row{grid-column:1/-1}}' +
       '.nb-library-filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0 12px}.nb-library-filters select,.nb-library-filters input[type=date]{border:1px solid #38527d;background:#0b152a;color:#fff;border-radius:10px;padding:9px 10px;min-height:38px}.nb-library-filters .spacer{flex:1}.nb-view-toggle.active{background:#284d8e;border-color:#78a7ff}.nb-drag-ghost{position:fixed;z-index:50000;pointer-events:none;background:#14264a;color:#fff;border:1px solid #79a6ff;border-radius:12px;padding:9px 12px;box-shadow:0 16px 50px #0009;font-weight:850;max-width:260px;transform:translate(14px,14px)}' +
       '.nb-topic-btn{margin-left:auto}' +
-      '.nb-editor{display:grid;gap:12px}' +
+      '.nb-editor{display:grid;gap:12px;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}' +
       '.nb-editor-top{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}' +
       '.nb-title-wrap{min-width:220px;flex:1}.nb-title-wrap h2{margin:0 0 4px;font-size:clamp(22px,3vw,34px)}' +
       '.nb-toolbar{display:flex;gap:7px;align-items:center;flex-wrap:wrap;padding:10px;border:1px solid var(--line);background:#0c1529;border-radius:14px}' +
@@ -3143,14 +3143,41 @@
     // contenido de la hoja como texto. La pizarra no es contenido seleccionable.
     if (scroller.dataset.nbSelectionGuard !== '1') {
       scroller.dataset.nbSelectionGuard = '1';
+      const clearNativeSelection = function() {
+        try {
+          const sel = window.getSelection && window.getSelection();
+          if (sel && sel.rangeCount) sel.removeAllRanges();
+        } catch (_) {}
+      };
       const blockNativeSelection = function(ev) {
         const target = ev.target;
         if (target && target.closest && target.closest('input,textarea,select,[contenteditable="true"]')) return;
         ev.preventDefault();
+        clearNativeSelection();
       };
       scroller.addEventListener('selectstart', blockNativeSelection, true);
       scroller.addEventListener('contextmenu', blockNativeSelection, true);
       scroller.addEventListener('dragstart', blockNativeSelection, true);
+      scroller.addEventListener('pointerdown', function(ev) {
+        if (ev.target && ev.target.closest && ev.target.closest('input,textarea,select,[contenteditable="true"]')) return;
+        clearNativeSelection();
+      }, true);
+
+      if (!document.documentElement.dataset.nbSelectionChangeGuard) {
+        document.documentElement.dataset.nbSelectionChangeGuard = '1';
+        document.addEventListener('selectionchange', function() {
+          const panel = document.getElementById('nbEditorPanel');
+          if (!panel || panel.classList.contains('hidden')) return;
+          const active = document.activeElement;
+          if (active && active.closest && active.closest('input,textarea,select,[contenteditable="true"]')) return;
+          const sel = window.getSelection && window.getSelection();
+          if (!sel || !sel.rangeCount) return;
+          const anchor = sel.anchorNode && (sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement);
+          if (anchor && panel.contains(anchor)) {
+            try { sel.removeAllRanges(); } catch (_) {}
+          }
+        });
+      }
     }
 
     function pointerPair() {
@@ -3201,6 +3228,27 @@
     }
 
     const handleCanvasPointerDown = function(e) {
+      try {
+        const sel = window.getSelection && window.getSelection();
+        if (sel && sel.rangeCount) sel.removeAllRanges();
+      } catch (_) {}
+
+      if (e.pointerType === 'pen') {
+        // iPad puede perder pointerup/pointercancel al aparecer una selección nativa,
+        // al hacer zoom o al cambiar de overlay. Un nuevo contacto del Pencil siempre
+        // empieza limpio para que nunca quede "muerta" la escritura.
+        activePointers.clear();
+        gestureState = null;
+        strokeEraseActive = false;
+        strokeEraseSeen.clear();
+        if (drawPointerId !== null && drawPointerId !== e.pointerId) {
+          currentDraft = null;
+          pointQueue = [];
+          clearTimeout(shapeHoldTimer);
+        }
+        drawPointerId = null;
+      }
+
       if (selectedImageId) {
         selectedImageId = null;
         renderImageLayer();
