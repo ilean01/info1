@@ -3443,8 +3443,9 @@
         return;
       }
       if (!currentDraft) return;
-      const p = pointFromEvent(e);
-      const activePage = getPage(getNotebook(currentNotebookId), currentPageId);
+      const activePage = currentInkPage();
+      const sampleRect = canvas.getBoundingClientRect();
+      const p = pointFromEvent(e, sampleRect, activePage);
       maybeGrowPage(activePage, p.y);
 
       let forceFullRedraw = false;
@@ -3475,7 +3476,7 @@
         const rawEvents = coalesced.length ? coalesced : [e];
         let added = false;
         rawEvents.forEach(function(sample) {
-          const samplePoint = pointFromEvent(sample);
+          const samplePoint = pointFromEvent(sample, sampleRect, activePage);
           const last = currentDraft.points[currentDraft.points.length - 1];
           const logicalDistance = last ? Math.hypot((samplePoint.x-last.x)*LOGICAL_WIDTH, samplePoint.y-last.y) : 999;
           if (logicalDistance < 0.18) return;
@@ -3495,9 +3496,9 @@
       e.preventDefault();
     };
     canvas.onpointermove = handlePointerMove;
-    if ('onpointerrawupdate' in window) {
-      canvas.onpointerrawupdate = handlePointerMove;
-    }
+    // pointermove includes coalesced hardware samples. Handling rawupdate too
+    // replays the same samples, adding backtracking and duplicate paint work.
+    canvas.onpointerrawupdate = null;
 
     const finish = function(e) {
       if (e.pointerType === 'touch' && activePointers.has(e.pointerId)) {
@@ -3641,9 +3642,19 @@
     };
   }
 
-  function pointFromEvent(e) {
-    const r = canvas.getBoundingClientRect();
-    const page = getPage(getNotebook(currentNotebookId), currentPageId);
+  // The editor normalizes pages when opening/receiving them. Ink sampling must
+  // read the current state directly, without walking every notebook per point.
+  function currentInkPage() {
+    const store = appState()[STORE_KEY];
+    const nb = store && store.notebooks && store.notebooks[currentNotebookId];
+    return nb && Array.isArray(nb.pages)
+      ? nb.pages.find(p => p.id === currentPageId) || nb.pages[0] || null
+      : null;
+  }
+
+  function pointFromEvent(e, rect, page) {
+    const r = rect || canvas.getBoundingClientRect();
+    page = page || currentInkPage();
     const scale = Math.max(0.001, r.width / LOGICAL_WIDTH);
     return {
       x: clamp((e.clientX - r.left) / Math.max(1, r.width), 0, 1),
@@ -3711,7 +3722,7 @@
 
   function drawStroke(stroke) {
     if (!ctx || !canvas || !stroke || !stroke.points || !stroke.points.length) return;
-    const page = getPage(getNotebook(currentNotebookId), currentPageId);
+    const page = currentInkPage();
     if (!page) return;
     const rect = canvas.getBoundingClientRect();
     const cssW = Math.max(1, rect.width);
@@ -3816,11 +3827,10 @@
   function flushPoints() {
     if (!currentDraft || !pointQueue.length) return;
     const pts = pointQueue.splice(0);
-    const nb = getNotebook(currentNotebookId);
-    const page = getPage(nb, currentPageId);
-    if (!nb || !page) return;
+    const page = currentInkPage();
+    if (!page) return;
     broadcast('stroke-points', {
-      notebookId: nb.id,
+      notebookId: currentNotebookId,
       pageId: page.id,
       strokeId: currentDraft.id,
       points: pts
