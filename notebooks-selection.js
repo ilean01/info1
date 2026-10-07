@@ -12,6 +12,7 @@
   let selectedImages = new Set();
   let clipboard = null;
   let lassoPoints = null;
+  let cancelLassoGesture = null;
   let boundCanvas = null;
   let stageResizeObserver = null;
   let lastContextKey = '';
@@ -119,6 +120,7 @@
   }
 
   function clearSelection(render = true) {
+    if (cancelLassoGesture) cancelLassoGesture();
     selectedStrokes.clear();
     selectedImages.clear();
     lassoPoints = null;
@@ -353,9 +355,10 @@
   }
 
   function leaveSelectionForDrawing() {
-    if (!selectionMode && !hasSelection()) return;
+    const hadSelection = selectionMode || hasSelection() || !!cancelLassoGesture;
     selectionMode=false;
     INFO1_LOCAL.setItem(LASSO_KEY,'0');
+    if (!hadSelection) return;
     clearSelection(false);
     const lasso=document.getElementById(TOOL_ID);
     if (lasso) lasso.classList.remove('active');
@@ -398,7 +401,7 @@
         INFO1_LOCAL.setItem(LASSO_KEY,selectionMode?'1':'0');
         btn.classList.toggle('active',selectionMode);
         if (!selectionMode) {
-          lassoPoints=null;
+          clearSelection(false);
           syncSelectionPresence({cleared:true,lasso:null});
         } else {
           syncSelectionPresence({lasso:[]});
@@ -493,6 +496,7 @@
       if (!selectionMode || isReadOnly()) return;
       // Two-finger touch remains reserved for the base pan/zoom implementation.
       if (e.pointerType==='touch') return;
+      if (cancelLassoGesture) cancelLassoGesture();
       stopEvent(e);
       lassoPoints=[logicalPoint(e.clientX,e.clientY)];
       renderOverlay();
@@ -500,7 +504,7 @@
       const pointerId=e.pointerId;
 
       const move=ev => {
-        if (ev.pointerId!==pointerId) return;
+        if (ev.pointerId!==pointerId || !lassoPoints) return;
         stopEvent(ev);
         const p=logicalPoint(ev.clientX,ev.clientY);
         const last=lassoPoints[lassoPoints.length-1];
@@ -513,18 +517,22 @@
       const end=ev => {
         if (ev.pointerId!==pointerId) return;
         stopEvent(ev);
-        window.removeEventListener('pointermove',move,true);
-        window.removeEventListener('pointerup',end,true);
-        window.removeEventListener('pointercancel',end,true);
         const polygon=(lassoPoints||[]).slice();
-        lassoPoints=null;
-        selectWithPolygon(polygon);
+        cancelLassoGesture();
+        if (ev.type !== 'pointercancel') selectWithPolygon(polygon);
         // El lazo queda activo para seguir seleccionando. No volvemos a Lápiz
         // automáticamente: solo cambia cuando la persona desactiva el lazo o
         // elige otra herramienta.
         renderOverlay();
         updateTools();
         syncSelectionPresence({active:true,lasso:null});
+      };
+      cancelLassoGesture = () => {
+        window.removeEventListener('pointermove',move,true);
+        window.removeEventListener('pointerup',end,true);
+        window.removeEventListener('pointercancel',end,true);
+        lassoPoints=null;
+        cancelLassoGesture=null;
       };
       window.addEventListener('pointermove',move,{capture:true,passive:false});
       window.addEventListener('pointerup',end,true);
@@ -1097,16 +1105,8 @@
   }
 
   function deactivateLassoForBaseTool(e) {
-    if (!selectionMode) return;
     const target = e.target && e.target.closest ? e.target.closest('#nbPen,#nbHighlighter,#nbLine,#nbEraser,#nbBrush,#nbShape') : null;
-    if (!target) return;
-    selectionMode = false;
-    lassoPoints = null;
-    const btn = document.getElementById(TOOL_ID);
-    if (btn) btn.classList.remove('active');
-    renderOverlay();
-    updateTools();
-    syncSelectionPresence({cleared:true,lasso:null});
+    if (target) leaveSelectionForDrawing();
   }
 
   function handleKeys(e) {
@@ -1145,6 +1145,10 @@
     document.addEventListener('click',deactivateLassoForBaseTool,true);
     document.addEventListener('change',deactivateLassoForBaseTool,true);
     document.addEventListener('keydown',handleKeys,true);
+    window.addEventListener('blur', () => { if (cancelLassoGesture) clearSelection(); });
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && cancelLassoGesture) clearSelection();
+    });
     const observer=new MutationObserver(mutations => {
       const onlyOwn = mutations.length > 0 && mutations.every(m => {
         const target = m.target && m.target.nodeType === 1 ? m.target : null;
