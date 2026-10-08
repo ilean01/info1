@@ -310,7 +310,7 @@ footer{padding:24px 0;text-align:center;color:var(--muted);font-size:12px}
 .heat-day-detail{margin-top:10px;padding:9px 11px;border-radius:11px;background:#091225;border:1px solid #273b60;color:#c7d4e9;font-size:12px;min-height:38px}
 .heat-cell.heat-selected{box-shadow:0 0 0 2px #79a6ff,0 0 0 4px #79a6ff22}
 .heat-quick-add{margin-top:10px;padding:10px 11px;border:1px solid #35527f;border-radius:12px;background:#0a1428;display:grid;gap:8px}
-.heat-quick-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}.heat-quick-head b{color:#eef5ff}.heat-quick-date{color:#8fb7ff;font-weight:900}
+.heat-quick-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}.heat-quick-head b{color:#eef5ff}.heat-quick-head-right{display:flex;align-items:center;gap:8px;margin-left:auto}.heat-quick-date{color:#8fb7ff;font-weight:900}.heat-quick-toggle{border:1px solid #3b5683;background:#0d1730;color:#cbd8ee;border-radius:8px;padding:6px 9px;font-weight:900;cursor:pointer}.heat-quick-toggle:hover{border-color:#79a6ff;color:#fff}.heat-quick-add.collapsed{padding-block:8px}.heat-quick-add.collapsed .heat-quick-controls,.heat-quick-add.collapsed .heat-quick-status{display:none}
 .heat-quick-controls{display:grid;grid-template-columns:minmax(180px,1.6fr) auto auto auto 86px auto;gap:7px;align-items:center}
 .heat-quick-controls select,.heat-quick-controls input{min-width:0;background:#0d1730;color:#fff;border:1px solid #38547f;border-radius:9px;padding:8px 9px}
 .heat-quick-controls button{border:1px solid #44679f;background:#14284c;color:#fff;border-radius:9px;padding:8px 10px;font-weight:900;white-space:nowrap}
@@ -539,7 +539,7 @@ html,body{max-width:100%;overflow-x:hidden}
       <div class="heatmap-wrap"><div id="heatmapGrid" class="heatmap-grid"></div></div>
       <div id="heatmapDayDetail" class="heat-day-detail">Elegí un día del calendario.</div>
       <div class="heat-quick-add">
-        <div class="heat-quick-head"><b>➕ Agregar tiempo directo</b><span id="heatmapQuickDate" class="heat-quick-date"></span></div>
+        <div class="heat-quick-head"><b>➕ Agregar tiempo directo</b><div class="heat-quick-head-right"><span id="heatmapQuickDate" class="heat-quick-date"></span><button id="heatmapQuickToggle" class="heat-quick-toggle" type="button" aria-expanded="true">Ocultar</button></div></div>
         <div class="heat-quick-controls">
           <select id="heatmapQuickTopic" aria-label="Tema para registrar tiempo"></select>
           <button type="button" data-heatmap-add-min="15">+15 min</button>
