@@ -536,8 +536,18 @@ function heatmapQuickTopicField(){return activePartial==="p2"?"heatmapQuickTopic
 function heatmapDateNoon(dateKey){const [y,m,d]=String(dateKey).split("-").map(Number);return new Date(y,m-1,d,12,0,0,0);}
 function heatmapDayDetailHtml(d,key,info,todayKey){return `${key===todayKey?'<span class="today-tag">Hoy</span> ':''}<b>${d.toLocaleDateString("es-PY",{weekday:"long",day:"2-digit",month:"long",year:"numeric"})}</b> · ${formatDuration(info.ms)} estudiado · ${info.topics.size} tema${info.topics.size===1?"":"s"} tocado${info.topics.size===1?"":"s"} · ${info.changes.size} tema${info.changes.size===1?"":"s"} cambió de estado`;}
 function renderHeatmapQuickAdd(){
-  const topic=document.getElementById("heatmapQuickTopic"),dateLabel=document.getElementById("heatmapQuickDate"),custom=document.getElementById("heatmapQuickMinutes"),status=document.getElementById("heatmapQuickStatus");
+  const panel=document.querySelector(".heat-quick-add"),toggle=document.getElementById("heatmapQuickToggle"),topic=document.getElementById("heatmapQuickTopic"),dateLabel=document.getElementById("heatmapQuickDate"),custom=document.getElementById("heatmapQuickMinutes"),status=document.getElementById("heatmapQuickStatus");
   if(!topic||!dateLabel)return;
+  const collapsed=INFO1_LOCAL.getItem("info1-heatmap-quick-collapsed-v1")==="1";
+  if(panel)panel.classList.toggle("collapsed",collapsed);
+  if(toggle){
+    toggle.textContent=collapsed?"＋ Mostrar":"Ocultar";
+    toggle.setAttribute("aria-expanded",collapsed?"false":"true");
+    toggle.onclick=()=>{
+      INFO1_LOCAL.setItem("info1-heatmap-quick-collapsed-v1",collapsed?"0":"1");
+      renderHeatmapQuickAdd();
+    };
+  }
   const entries=allTopicEntries();
   const running=activeCrono()?.id;
   const saved=state.__settings?.[heatmapQuickTopicField()]||"";
