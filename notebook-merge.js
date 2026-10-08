@@ -95,6 +95,20 @@
       if(JSON.stringify(l)===JSON.stringify(r))return clone(l);
       if(JSON.stringify(l)===JSON.stringify(b))return clone(r);
       if(JSON.stringify(r)===JSON.stringify(b))return clone(l);
+      // Independent finished study sessions are additive. Only merge appends;
+      // edits/deletions of an existing session still require conflict handling.
+      if(path.endsWith('.sesiones') && Array.isArray(l) && Array.isArray(r) &&
+         (b===undefined || Array.isArray(b)) &&
+         (b||[]).every(x=>l.some(y=>JSON.stringify(x)===JSON.stringify(y)) && r.some(y=>JSON.stringify(x)===JSON.stringify(y)))) {
+        const sessions=new Map();
+        for(const entry of [...l,...r]){
+          const key=entry.id || entry.inicio;
+          if(!key){conflicts.push(path);return clone(l);}
+          const old=sessions.get(key);
+          if(!old || Number(entry.ms)>Number(old.ms))sessions.set(key,clone(entry));
+        }
+        return [...sessions.values()];
+      }
       if(path==='__settings.lastSavedAt')return (l||'')>(r||'')?l:r;
       if(l&&r&&typeof l==='object'&&typeof r==='object'&&!Array.isArray(l)&&!Array.isArray(r)){
         const out={};for(const k of new Set([...Object.keys(l),...Object.keys(r)])){const v=walk(b?.[k],l[k],r[k],path?path+'.'+k:k);if(v!==undefined)out[k]=v;}return out;

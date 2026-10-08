@@ -42,11 +42,20 @@
   let channel = null;
   let booting = false;
 
-  // Un cambio del cronómetro recibido desde otro dispositivo ya viene de la nube.
-  // Lo marcamos como visto para que no se vuelva a subir como si fuera una edición local.
-  window.addEventListener('info1:shared-timer', () => {
-    try { lastSeenRaw = localRaw(); } catch {}
-  });
+  // A local save schedules its upload immediately. Timer messages must not
+  // acknowledge unrelated pending edits in the same state snapshot.
+  function notifyLocalSave() {
+    if (applyingRemote) return;
+    const now=localRaw();
+    if(now===lastSeenRaw && !dirty)return;
+    lastSeenRaw=now;
+    dirty=true;
+    INFO1_LOCAL.setItem(UNSYNCED_KEY,'1');
+    clearTimeout(pushTimer);
+    pushTimer=setTimeout(pushLocal,0);
+  }
+  window.addEventListener('info1:local-save',notifyLocalSave);
+  window.addEventListener('info1:shared-timer',notifyLocalSave);
 
   function parse(raw, fallback = {}) {
     try { return raw ? JSON.parse(raw) : fallback; }
@@ -291,6 +300,7 @@
 
   function showSyncedBadge(message) {
     const name = workspace?.name || 'INFO 1';
+    if(dirty || conflict){badge(conflict?'☁️ Conflicto pendiente · copia local conservada':'☁️ Guardado local · pendiente de confirmar en nube','warn');return;}
     badge(
       message || `☁️ Sincronizado · ${name} · rev ${remoteRevision}`,
       'ok',
@@ -590,6 +600,11 @@
       if(!userInitiated && Number(remote.revision||0)<remoteRevision)return false;
 
       let next = window.INFO1_NOTEBOOK_MERGE.withNotebooks(localState(),normalState(remote.state));
+      if(!userInitiated && Object.keys(cloudBase()).length){
+        const merged=window.INFO1_NOTEBOOK_MERGE.state(cloudBase(),localState(),normalState(remote.state));
+        if(merged.conflicts.length){dirty=true;INFO1_LOCAL.setItem(UNSYNCED_KEY,'1');showConflictBadge();return false;}
+        next=merged.value;
+      }
       let nextRaw = JSON.stringify(next);
       const oldRaw = localRaw();
 

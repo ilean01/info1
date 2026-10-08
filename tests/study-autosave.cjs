@@ -1,0 +1,18 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
+const read=f=>fs.readFileSync(path.join(__dirname,'..',f),'utf8');
+const core=read('app-core.js'),cloud=read('cloud-sync.js');
+const item={skills:{theory:'unknown'},status:'unknown'},fields={modalPriority:{value:'high'},modalReview:{checked:true},modalPractice:{checked:true},modalNotes:{value:'Mi nota'}};
+let saved=0,closed=0;
+const c={currentEdit:{id:'x',si:0,ii:0},activePartial:'p1',SKILLS:['theory'],getItemState:()=>item,modalSkillsValue:()=>({theory:'known'}),aggregateFromSkills:x=>x.theory,recordSkillChange(){},document:{getElementById:id=>fields[id]},save:()=>saved++,closeModal:()=>closed++,renderAll(){}};
+vm.createContext(c);vm.runInContext(core.slice(core.indexOf('function saveModal('),core.indexOf('function autosaveModalChange(')),c);
+c.saveModal(true);assert.equal(item.skills.theory,'known');assert.equal(item.notes,'Mi nota');assert.equal(item.priority,'high');assert.equal(saved,1);assert.equal(closed,0);
+c.saveModal();assert.equal(closed,1);console.log('PASS immediate ficha save preserves open editor; explicit save closes it');
+const handlers={},timers=[];let raw='changed';
+const s={pushTimer:null,applyingRemote:false,lastSeenRaw:'old',dirty:false,UNSYNCED_KEY:'pending',INFO1_LOCAL:{setItem(){}},localRaw:()=>raw,clearTimeout(){},setTimeout:(fn,ms)=>timers.push(ms),pushLocal(){},window:{addEventListener:(name,fn)=>handlers[name]=fn}};
+vm.createContext(s);vm.runInContext(cloud.slice(cloud.indexOf('  function notifyLocalSave()'),cloud.indexOf('  function parse(')),s);
+handlers['info1:local-save']();assert(s.dirty);assert.equal(timers[0],0);
+raw='new timer and unsent progress';handlers['info1:shared-timer']();assert(s.dirty);assert.equal(timers[1],0);console.log('PASS local edits and timer updates immediately queue cloud upload');
+const m={window:{},sessionStorage:{getItem(){},setItem(){}},crypto:require('node:crypto').webcrypto};vm.createContext(m);vm.runInContext(read('notebook-merge.js'),m);
+const M=m.window.INFO1_NOTEBOOK_MERGE,base={x:{sesiones:[]}},left={x:{sesiones:[{inicio:'A',ms:3600000}]}},right={x:{sesiones:[{inicio:'B',ms:1800000}]}};
+const merged=M.state(base,left,right);assert.equal(merged.conflicts.length,0);assert.equal(merged.value.x.sesiones.reduce((n,x)=>n+x.ms,0),5400000);
+assert.equal(M.state(base,left,left).value.x.sesiones.length,1);console.log('PASS concurrent study hours combine without double-counting identical sessions');

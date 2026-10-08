@@ -10,6 +10,7 @@
   save=function(){
     state.__settings??={};state.__settings.lastSavedAt=new Date().toISOString();
     try{INFO1_LOCAL.setItem(STORAGE_KEY,JSON.stringify(state));INFO1_LOCAL.setItem(STORAGE_KEY+'-v15-unsynced','1');localSaveFailed=false;window.INFO1_LOCAL_SAVE_OK=true;}catch(e){localSaveFailed=true;window.INFO1_LOCAL_SAVE_OK=false;}
+    window.dispatchEvent(new Event('info1:local-save'));
     syncDirty=true;v14LastSyncStatus=localSaveFailed?' · navegador sin espacio: copia pendiente':' · copia en carpeta pendiente';renderPersistStatus();
     clearTimeout(v14ServerSyncTimer);v14ServerSyncTimer=setTimeout(flushStudyState,400);
   };

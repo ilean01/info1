@@ -508,9 +508,21 @@ window.addEventListener("pagehide",()=>{
   if(id&&activeCrono()?.id===id)stopFichaTimer(id);
 });
 
-function saveModal(){if(!currentEdit)return;const s=getItemState(currentEdit.id);if(activePartial==="p2"){savePersonSkills("ile",currentEdit.si,currentEdit.ii,personModalSkillsValue("ile"));savePersonSkills("elias",currentEdit.si,currentEdit.ii,personModalSkillsValue("elias"));}else{const newSkills=modalSkillsValue(),prevAgg=s.status;for(const k of SKILLS){const old=s.skills[k],nw=newSkills[k];if(old!==nw){s.skills[k]=nw;const newAgg=aggregateFromSkills(s.skills);recordSkillChange(currentEdit.id,k,old,nw,prevAgg,newAgg);}}s.status=aggregateFromSkills(s.skills);}s.priority=document.getElementById("modalPriority").value;s.review=document.getElementById("modalReview").checked;s.practice=document.getElementById("modalPractice").checked;s.notes=document.getElementById("modalNotes").value.trim();save();closeModal();renderAll();}
+function saveModal(keepOpen=false){if(!currentEdit)return;const s=getItemState(currentEdit.id);if(activePartial==="p2"){savePersonSkills("ile",currentEdit.si,currentEdit.ii,personModalSkillsValue("ile"));savePersonSkills("elias",currentEdit.si,currentEdit.ii,personModalSkillsValue("elias"));}else{const newSkills=modalSkillsValue(),prevAgg=s.status;for(const k of SKILLS){const old=s.skills[k],nw=newSkills[k];if(old!==nw){s.skills[k]=nw;const newAgg=aggregateFromSkills(s.skills);recordSkillChange(currentEdit.id,k,old,nw,prevAgg,newAgg);}}s.status=aggregateFromSkills(s.skills);}s.priority=document.getElementById("modalPriority").value;s.review=document.getElementById("modalReview").checked;s.practice=document.getElementById("modalPractice").checked;s.notes=document.getElementById("modalNotes").value.trim();save();if(keepOpen!==true){closeModal();renderAll();}}
 
 /* ===== Errores ===== */
+function autosaveModalChange(e){
+  if(!currentEdit || !document.getElementById('modalBack').classList.contains('show'))return;
+  const target=e.target?.closest?.('[data-modal-skill],[data-quick-status],[data-person-skill],[data-person-quick],#modalPriority,#modalReview,#modalPractice,#modalNotes');
+  if(!target)return;
+  if(e.type==='click' && !target.matches('button'))return;
+  if(e.type!=='click' && target.matches('button'))return;
+  saveModal(true);
+}
+document.addEventListener('click',autosaveModalChange);
+document.addEventListener('input',autosaveModalChange);
+document.addEventListener('change',autosaveModalChange);
+
 function addErrorCurrent(){if(!currentEdit)return;const text=document.getElementById("errorText").value.trim();if(!text)return;const s=getItemState(currentEdit.id);s.errores.push({id:uuid(),texto:text,categoria:document.getElementById("errorCategory").value,fecha:new Date().toISOString()});document.getElementById("errorText").value="";save();renderModalErrors(currentEdit.id);renderErrorsView();}
 function normalizeError(t){return t.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/\s+/g," ").trim();}
 function renderErrorsView(){const root=document.getElementById("errorsGrid"),count=document.getElementById("errorsCount");if(!root)return;const groups=new Map();for(const e of allTopicEntries()){const s=getItemState(e.id);for(const er of s.errores){const key=er.categoria+"|"+normalizeError(er.texto);if(!groups.has(key))groups.set(key,{texto:er.texto,categoria:er.categoria,count:0,topics:new Map()});const g=groups.get(key);g.count++;g.topics.set(e.id,(g.topics.get(e.id)||0)+1);}}const arr=[...groups.values()].sort((a,b)=>b.count-a.count||a.texto.localeCompare(b.texto));count.textContent=`${arr.reduce((a,g)=>a+g.count,0)} errores`;if(!arr.length){root.innerHTML='<div class="empty">Todavía no registraste errores.</div>';return}root.innerHTML=arr.map(g=>`<div class="error-group"><div style="display:flex;justify-content:space-between;gap:10px"><div><span class="error-cat">${escapeHtml(g.categoria)}</span><h4>${escapeHtml(g.texto)}</h4></div><div class="error-count">×${g.count}</div></div><div class="error-topics">${[...g.topics.entries()].map(([id,n])=>`${escapeHtml(topicTitle(id))}${n>1?` (×${n})`:""}`).join("<br>")}</div></div>`).join("");}
