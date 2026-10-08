@@ -528,21 +528,58 @@ function normalizeError(t){return t.toLowerCase().normalize("NFD").replace(/[\u0
 function renderErrorsView(){const root=document.getElementById("errorsGrid"),count=document.getElementById("errorsCount");if(!root)return;const groups=new Map();for(const e of allTopicEntries()){const s=getItemState(e.id);for(const er of s.errores){const key=er.categoria+"|"+normalizeError(er.texto);if(!groups.has(key))groups.set(key,{texto:er.texto,categoria:er.categoria,count:0,topics:new Map()});const g=groups.get(key);g.count++;g.topics.set(e.id,(g.topics.get(e.id)||0)+1);}}const arr=[...groups.values()].sort((a,b)=>b.count-a.count||a.texto.localeCompare(b.texto));count.textContent=`${arr.reduce((a,g)=>a+g.count,0)} errores`;if(!arr.length){root.innerHTML='<div class="empty">Todavía no registraste errores.</div>';return}root.innerHTML=arr.map(g=>`<div class="error-group"><div style="display:flex;justify-content:space-between;gap:10px"><div><span class="error-cat">${escapeHtml(g.categoria)}</span><h4>${escapeHtml(g.texto)}</h4></div><div class="error-count">×${g.count}</div></div><div class="error-topics">${[...g.topics.entries()].map(([id,n])=>`${escapeHtml(topicTitle(id))}${n>1?` (×${n})`:""}`).join("<br>")}</div></div>`).join("");}
 
 /* ===== Heatmap y totales ===== */
+let heatmapSelectedDate=localDateKey(new Date());
 function allSessions(){const out=[];for(const e of allTopicEntries()){const s=getItemState(e.id);for(const x of s.sesiones)out.push({...x,topicId:e.id});}return out;}
 function renderStudyTotals(){const sessions=allSessions(),today=localDateKey(new Date()),global=sessions.reduce((a,x)=>a+x.ms,0),todayMs=sessions.filter(x=>localDateKey(x.inicio)===today).reduce((a,x)=>a+x.ms,0);document.getElementById("studyTotalGlobal").textContent=formatHMS(global);document.getElementById("studyToday").textContent=formatHMS(todayMs);}
 function heatmapData(){const by={};for(const x of allSessions()){const k=localDateKey(x.inicio);if(!by[k])by[k]={ms:0,topics:new Set(),changes:new Set()};by[k].ms+=x.ms;by[k].topics.add(x.topicId);}for(const e of allTopicEntries()){for(const h of getItemState(e.id).historialEstados||[]){const k=localDateKey(h.fecha);if(!by[k])by[k]={ms:0,topics:new Set(),changes:new Set()};by[k].changes.add(e.id);}}return by;}
+function heatmapQuickTopicField(){return activePartial==="p2"?"heatmapQuickTopicP2":"heatmapQuickTopicP1";}
+function heatmapDateNoon(dateKey){const [y,m,d]=String(dateKey).split("-").map(Number);return new Date(y,m-1,d,12,0,0,0);}
+function heatmapDayDetailHtml(d,key,info,todayKey){return `${key===todayKey?'<span class="today-tag">Hoy</span> ':''}<b>${d.toLocaleDateString("es-PY",{weekday:"long",day:"2-digit",month:"long",year:"numeric"})}</b> · ${formatDuration(info.ms)} estudiado · ${info.topics.size} tema${info.topics.size===1?"":"s"} tocado${info.topics.size===1?"":"s"} · ${info.changes.size} tema${info.changes.size===1?"":"s"} cambió de estado`;}
+function renderHeatmapQuickAdd(){
+  const topic=document.getElementById("heatmapQuickTopic"),dateLabel=document.getElementById("heatmapQuickDate"),custom=document.getElementById("heatmapQuickMinutes"),status=document.getElementById("heatmapQuickStatus");
+  if(!topic||!dateLabel)return;
+  const entries=allTopicEntries();
+  const running=activeCrono()?.id;
+  const saved=state.__settings?.[heatmapQuickTopicField()]||"";
+  let preferred=entries.some(e=>e.id===running)?running:(entries.some(e=>e.id===saved)?saved:(entries[0]?.id||""));
+  topic.innerHTML=entries.map(e=>`<option value="${escapeHtml(e.id)}">${escapeHtml(e.item[0])}</option>`).join("");
+  if(preferred)topic.value=preferred;
+  topic.onchange=()=>{state.__settings[heatmapQuickTopicField()]=topic.value;save();};
+  const d=heatmapDateNoon(heatmapSelectedDate);
+  dateLabel.textContent=Number.isNaN(d.getTime())?"":d.toLocaleDateString("es-PY",{weekday:"short",day:"2-digit",month:"short"});
+  const add=min=>{
+    min=Number(min);
+    if(!topic.value||!Number.isFinite(min)||min<=0){if(status)status.textContent="Elegí un tema y una cantidad de minutos.";return;}
+    const inicio=heatmapDateNoon(heatmapSelectedDate);
+    if(Number.isNaN(inicio.getTime()))return;
+    state.__settings[heatmapQuickTopicField()]=topic.value;
+    getItemState(topic.value).sesiones.push({inicio:inicio.toISOString(),ms:Math.round(min*60000)});
+    save();
+    if(status)status.textContent=`✓ Agregados ${min} min a ${topicTitle(topic.value)}`;
+    if(custom)custom.value="";
+    renderStudyTotals();
+    renderHeatmap();
+    if(currentEdit?.id===topic.value)renderSessionTable(topic.value);
+  };
+  document.querySelectorAll("[data-heatmap-add-min]").forEach(btn=>btn.onclick=()=>add(btn.dataset.heatmapAddMin));
+  const addCustom=document.getElementById("heatmapQuickAddCustom");
+  if(addCustom)addCustom.onclick=()=>add(custom?.value);
+  if(custom)custom.onkeydown=e=>{if(e.key==="Enter"){e.preventDefault();add(custom.value);}};
+}
 function renderHeatmap(){
   const root=document.getElementById("heatmapGrid"),detail=document.getElementById("heatmapDayDetail");if(!root)return;
   const by=heatmapData(),end=new Date();end.setHours(12,0,0,0);const todayKey=localDateKey(end),start=new Date(end);start.setDate(start.getDate()-90);root.innerHTML="";
+  if(!heatmapSelectedDate)heatmapSelectedDate=todayKey;
   for(let i=0;i<start.getDay();i++){const x=document.createElement("div");x.className="heat-cell heat-empty";root.appendChild(x)}
-  let todayInfo={ms:0,topics:new Set(),changes:new Set()},todayDate=new Date(end);
+  let selectedInfo=by[heatmapSelectedDate]||{ms:0,topics:new Set(),changes:new Set()},selectedDate=heatmapDateNoon(heatmapSelectedDate);
   for(let cursor=new Date(start);cursor<=end;cursor.setDate(cursor.getDate()+1)){
     const d=new Date(cursor),key=localDateKey(d),info=by[key]||{ms:0,topics:new Set(),changes:new Set()},min=Math.round(info.ms/60000),lvl=min===0?0:min<15?1:min<30?2:min<60?3:4,x=document.createElement("button");
-    x.type="button";x.className=`heat-cell heat-${lvl}${key===todayKey?" heat-today":""}`;x.dataset.date=key;x.setAttribute("aria-label",`${key===todayKey?"Hoy, ":""}${d.toLocaleDateString("es-PY",{weekday:"long",day:"2-digit",month:"long",year:"numeric"})}: ${min} minutos`);x.title=`${key===todayKey?"HOY · ":""}${d.toLocaleDateString("es-PY")}: ${min} min`;
-    x.onclick=()=>{detail.innerHTML=`${key===todayKey?'<span class="today-tag">Hoy</span> ':''}<b>${d.toLocaleDateString("es-PY",{weekday:"long",day:"2-digit",month:"long",year:"numeric"})}</b> · ${formatDuration(info.ms)} estudiado · ${info.topics.size} tema${info.topics.size===1?"":"s"} tocado${info.topics.size===1?"":"s"} · ${info.changes.size} tema${info.changes.size===1?"":"s"} cambió de estado`;};
-    if(key===todayKey){todayInfo=info;todayDate=d;}root.appendChild(x);
+    x.type="button";x.className=`heat-cell heat-${lvl}${key===todayKey?" heat-today":""}${key===heatmapSelectedDate?" heat-selected":""}`;x.dataset.date=key;x.setAttribute("aria-label",`${key===todayKey?"Hoy, ":""}${d.toLocaleDateString("es-PY",{weekday:"long",day:"2-digit",month:"long",year:"numeric"})}: ${min} minutos`);x.title=`${key===todayKey?"HOY · ":""}${d.toLocaleDateString("es-PY")}: ${min} min`;
+    x.onclick=()=>{heatmapSelectedDate=key;renderHeatmap();};
+    if(key===heatmapSelectedDate){selectedInfo=info;selectedDate=d;}root.appendChild(x);
   }
-  if(detail)detail.innerHTML=`<span class="today-tag">Hoy</span> <b>${todayDate.toLocaleDateString("es-PY",{weekday:"long",day:"2-digit",month:"long",year:"numeric"})}</b> · ${formatDuration(todayInfo.ms)} estudiado · ${todayInfo.topics.size} tema${todayInfo.topics.size===1?"":"s"} tocado${todayInfo.topics.size===1?"":"s"} · ${todayInfo.changes.size} tema${todayInfo.changes.size===1?"":"s"} cambió de estado`;
+  if(detail)detail.innerHTML=heatmapDayDetailHtml(selectedDate,heatmapSelectedDate,selectedInfo,todayKey);
+  renderHeatmapQuickAdd();
 }
 
 /* ===== Render vistas ===== */
