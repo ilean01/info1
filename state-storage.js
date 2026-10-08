@@ -29,8 +29,19 @@
     for(const id of notebookKeys)if(!notebooks[id])tx.objectStore('notebooks').delete(id);
     for(const [id,a] of Object.entries(assets))if(JSON.stringify(old.mediaAssets?.[id])!==JSON.stringify(a))tx.objectStore('assets').put(a,id);
     for(const id of assetKeys)if(!assets[id])tx.objectStore('assets').delete(id);
-    // Todo lo que está en journal ya quedó incorporado a este estado completo.
-    tx.objectStore('journal').clear();
+    // A queued snapshot may predate journaled ink. Remove only recovery
+    // records that this exact snapshot contains (or explicitly deletes).
+    const cursorRequest=tx.objectStore('journal').openCursor();
+    cursorRequest.onsuccess=()=>{
+      const cursor=cursorRequest.result;if(!cursor)return;
+      const r=cursor.value,nb=notebooks[r.notebook.id];
+      const page=nb?.pages?.find(p=>p.id===r.page.id);
+      const saved=page?.strokes?.find(s=>s.id===r.stroke.id);
+      const removed=store._deletedNotebooks?.[r.notebook.id] || nb?._deletedPages?.[r.page.id] || page?._deletedStrokes?.[r.stroke.id];
+      if ((saved && JSON.stringify(saved)===JSON.stringify(r.stroke)) ||
+          (removed && removed >= (r.stroke._v || ''))) cursor.delete();
+      cursor.continue();
+    };
     } catch(error){tx.abort();await done.catch(()=>{});throw error;}
     await done;notebookKeys=new Set(Object.keys(notebooks));assetKeys=new Set(Object.keys(assets));committedRaw=raw;
   }

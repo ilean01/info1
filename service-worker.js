@@ -1,4 +1,4 @@
-const CACHE = 'info1-pwa-network-first-v22-ink';
+const CACHE = 'info1-pwa-network-first-v23-durable';
 const APP_SHELL = [
   './',
   './index.html',

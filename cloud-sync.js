@@ -939,7 +939,15 @@
       const raw = JSON.stringify(next);
       try {
         writePrimaryState(raw);
-        if (!dirty && !conflict) lastSeenRaw = raw;
+        // Broadcast delivery is not a database commit. Keep changes pending
+        // until pushLocal confirms the durable revision, including local edits
+        // that the polling monitor has not observed yet.
+        if (raw !== lastSeenRaw) {
+          dirty = true;
+          INFO1_LOCAL.setItem(UNSYNCED_KEY, '1');
+          clearTimeout(pushTimer);
+          pushTimer = setTimeout(pushLocal, 350);
+        }
         return true;
       } catch (e) {
         console.warn('INFO1 realtime cache: almacenamiento local lleno', e);
