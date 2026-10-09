@@ -115,11 +115,9 @@
   function togglePanel(event) {
     event?.preventDefault(); event?.stopPropagation();
     const badge = document.getElementById('info1CloudBadge');
-    if (!badge) return;
-    if (badge.classList.contains('info1-settings-open')) return closePanel();
-    ensureBackdrop().classList.add('open');
-    badge.classList.add('info1-settings-open');
-    document.getElementById(BTN_ID)?.setAttribute('aria-expanded','true');
+    const host = document.getElementById('settingsCloud');
+    if (badge && host && badge.parentElement !== host) host.appendChild(badge);
+    openView('settingsView');
   }
 
   function ensureButton() {
@@ -128,12 +126,15 @@
     if (!btn) {
       btn = document.createElement('button');
       btn.id = BTN_ID; btn.type = 'button';
-      btn.setAttribute('aria-expanded','false'); btn.setAttribute('aria-controls','info1CloudBadge');
+      btn.setAttribute('aria-controls','settingsView');
       btn.innerHTML = '<span class="cloud-dot" aria-hidden="true"></span><span>⚙️ Ajustes</span>';
       btn.addEventListener('click', togglePanel);
       const host = document.querySelector('.partial-switcher-tabs') || document.querySelector('.toolbar') || document.body;
       host.appendChild(btn);
     }
+    const badge = document.getElementById('info1CloudBadge');
+    const host = document.getElementById('settingsCloud');
+    if (badge && host && badge.parentElement !== host) host.appendChild(badge);
     updateButtonState();
   }
 

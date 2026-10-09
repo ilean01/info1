@@ -509,6 +509,21 @@ html,body{max-width:100%;overflow-x:hidden}
 @media(max-width:640px){.written-shell{padding:13px}.written-people{grid-template-columns:1fr}.written-top{align-items:flex-start}.written-top b{font-size:22px}.guide-grid{grid-template-columns:1fr}.network-topic-grid{grid-template-columns:1fr}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
 
+
+/* Cards keep their reading order even when a detail toggle uses flex. */
+.topic{flex-direction:column;align-items:stretch;gap:8px}
+.topic>div{min-width:0;max-width:100%;flex-shrink:0}
+.topic>div:first-child{flex-wrap:wrap}
+.topic-title{flex:1 1 180px;overflow-wrap:break-word}
+.topic .status-chip{flex:0 0 auto;max-width:100%}
+.topic .note{white-space:pre-wrap;overflow-wrap:break-word;line-height:1.6}
+.topic .study-line{flex-wrap:wrap}
+#settingsView{max-width:960px;margin:0 auto;padding-bottom:60px}
+#settingsView button{border:1px solid #405a82;border-radius:10px;background:#14243f;color:#eef4ff;padding:10px 14px;cursor:pointer;font:inherit}
+#settingsCloud #info1CloudBadge{display:block!important;position:static!important;width:100%!important;max-width:none!important;box-sizing:border-box;box-shadow:none!important;margin:16px 0!important;padding:20px!important;border-radius:16px!important}
+#settingsCloud #info1CloudBadge>span{display:block;margin-bottom:12px}
+#settingsView [hidden]{display:none!important}
+
 </style>
 </head>
 <body>
@@ -688,8 +703,8 @@ html,body{max-width:100%;overflow-x:hidden}
     </details>
   </nav>
 
-  <div id="syncTools" hidden><b>Conservación del progreso</b><p>Si hay un conflicto, exportá el backup completo antes de recuperar otra copia. El progreso anterior del navegador se conserva como recuperación local.</p><button id="retrySync">Reintentar copia en carpeta</button><button id="useLocalRecovery">Recuperar progreso anterior del navegador</button></div><button id="showVersions">Historial de copias</button><div id="versionHistory" hidden></div>
-  <main><section id="writtenView" class="view"><div class="status-page-head"><div><h2>Simulacro escrito · Ile + Elías</h2><p>Construcciones, demostraciones y análisis. Respuestas y fotos separadas; soluciones al entregar.</p></div></div><div class="written-shell"><div class="written-controls"><label>Rinden<select id="writtenWho"><option value="both">Ile y Elías</option><option value="ile">Ile</option><option value="elias">Elías</option></select></label><label>Bloque<select id="writtenCategory"><option value="all">Todos</option><option>PDA</option><option>NPDA</option><option>Gramáticas</option><option>TM</option></select></label><label>Ejercicios<select id="writtenCount"><option>5</option><option>8</option><option>12</option></select></label><label>Minutos<select id="writtenMinutes"><option>30</option><option selected>60</option><option>90</option><option>120</option></select></label><button id="writtenStart">Empezar</button></div><div id="writtenWork"></div><h3>Mis prácticas guardadas</h3><div id="writtenHistory" class="written-history"></div></div></section>
+  <main><section id="settingsView" class="view"><div class="status-page-head"><div><h2>Ajustes</h2><p>Sincronización, copias y recuperación de tu progreso.</p></div><button type="button" onclick="openView('boardView')">Volver al inicio</button></div><div id="settingsCloud"></div>  <div id="syncTools" hidden><b>Conservación del progreso</b><p>Si hay un conflicto, exportá el backup completo antes de recuperar otra copia. El progreso anterior del navegador se conserva como recuperación local.</p><button id="retrySync">Reintentar copia en carpeta</button><button id="useLocalRecovery">Recuperar progreso anterior del navegador</button></div><button id="showVersions">Historial de copias</button><div id="versionHistory" hidden></div>
+</section><section id="writtenView" class="view"><div class="status-page-head"><div><h2>Simulacro escrito · Ile + Elías</h2><p>Construcciones, demostraciones y análisis. Respuestas y fotos separadas; soluciones al entregar.</p></div></div><div class="written-shell"><div class="written-controls"><label>Rinden<select id="writtenWho"><option value="both">Ile y Elías</option><option value="ile">Ile</option><option value="elias">Elías</option></select></label><label>Bloque<select id="writtenCategory"><option value="all">Todos</option><option>PDA</option><option>NPDA</option><option>Gramáticas</option><option>TM</option></select></label><label>Ejercicios<select id="writtenCount"><option>5</option><option>8</option><option>12</option></select></label><label>Minutos<select id="writtenMinutes"><option>30</option><option selected>60</option><option>90</option><option>120</option></select></label><button id="writtenStart">Empezar</button></div><div id="writtenWork"></div><h3>Mis prácticas guardadas</h3><div id="writtenHistory" class="written-history"></div></div></section>
     <section id="boardView" class="view active"><div class="board">
       <div class="column"><div class="colhead"><h3>🔴 No sé</h3><div class="small">Al menos una evaluación está en rojo.</div></div><div id="col-unknown" class="cards"></div></div>
       <div class="column"><div class="colhead"><h3>🟡 Más o menos</h3><div class="small">Todavía hay habilidades a reforzar.</div></div><div id="col-some" class="cards"></div></div>
@@ -849,7 +864,7 @@ html,body{max-width:100%;overflow-x:hidden}
 <script async src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <script defer src="./notebook-merge.js?v=20261008-study-autosave"></script>
 <script defer src="./state-storage.js?v=20261008-durable-sync"></script>
-<script defer src="./app-bootstrap.js?v=20261008-heatquick2"></script>
+<script defer src="./app-bootstrap.js?v=20261009-settings-page"></script>
 
 
 <script>
