@@ -132,7 +132,7 @@
     disconnect();
     channelName = wanted;
     channelClient = c.client;
-    channel = c.client.channel(wanted, { config: { broadcast: { self: false, ack: false } } })
+    channel = c.client.channel(wanted, { config: { private: true, broadcast: { self: false, ack: false } } })
       .on('broadcast', { event: 'laser' }, msg => handleRemote(msg && msg.payload ? msg.payload : {}))
       .subscribe(status => {
         ready = status === 'SUBSCRIBED';
