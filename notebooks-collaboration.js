@@ -137,6 +137,7 @@
     connecting=true;
     const thisChannel=c.client.channel(wanted,{
       config:{
+        private:true,
         presence:{key:deviceId()},
         broadcast:{self:false,ack:false}
       }
