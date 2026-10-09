@@ -8,7 +8,7 @@
   async function boot(){
     await window.INFO1_STATE_STORAGE.ready;
     window.INFO1_WAS_LOCAL_STATE=!!window.INFO1_STATE_STORAGE.raw;
-    for(const src of ['./app-core.js?v=20261008-heatquick2', './app-study.js?v=20261008-study-autosave', './vendor/supabase-2.117.2.js', './supabase-config.js?v=20261005-width2', './cloud-sync.js?v=20261009-reconnect', './cloud-settings-ui.js?v=20261009-settings-page', './device-sync.js?v=20261005-width2', './notebooks-realtime.js?v=20261009-ink-final', './notebooks-selection.js?v=20261007-selection-lifecycle', './notebooks-resilience.js?v=20261005-inkstatus3', './notebooks-collaboration.js?v=20261005-width2', './notebooks-interface.js?v=20261005-width2', './notebooks-laser.js?v=20261005-toolrestore3', './supabase-media-bridge.js?v=20261005-width2'])await script(src);
+    for(const src of ['./app-core.js?v=20261008-heatquick2', './app-study.js?v=20261009-audit', './vendor/supabase-2.117.2.js', './supabase-config.js?v=20261005-width2', './cloud-sync.js?v=20261009-reconnect', './cloud-settings-ui.js?v=20261009-settings-page', './device-sync.js?v=20261005-width2', './notebooks-realtime.js?v=20261009-audit', './notebooks-selection.js?v=20261007-selection-lifecycle', './notebooks-resilience.js?v=20261009-audit', './notebooks-collaboration.js?v=20261005-width2', './notebooks-interface.js?v=20261005-width2', './notebooks-laser.js?v=20261005-toolrestore3', './supabase-media-bridge.js?v=20261005-width2'])await script(src);
     panel.remove();window.dispatchEvent(new Event('info1:app-ready'));
   }
   boot().catch(error=>{panel.textContent='No se pudo abrir INFO 1. Tus datos conservados no se borraron. '+error.message+' ';

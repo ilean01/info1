@@ -51,6 +51,8 @@
   }
 
   function deviceId() {
+    const bridge=window.INFO1_NOTEBOOKS?._bridge;
+    if(bridge?.deviceId)return bridge.deviceId();
     let id = INFO1_LOCAL.getItem(DEVICE_KEY);
     if (!id) {
       id = (crypto && crypto.randomUUID) ? crypto.randomUUID() : 'nb-'+Date.now()+'-'+Math.random().toString(36).slice(2);

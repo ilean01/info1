@@ -9,12 +9,13 @@
   const notify=()=>window.dispatchEvent(new Event('info1:storage-status'));
   const txDone=tx=>new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error||Error('No se pudo guardar'));tx.onabort=()=>reject(tx.error||Error('Guardado cancelado'));});
   const request=r=>new Promise((resolve,reject)=>{r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
-  function queue(operation, silent=false){
+  const failures=new Map();
+  function queue(operation, silent=false, key=KEY){
     pending++;
     if(!silent)notify();
     const next=chain.catch(()=>{}).then(operation);
     chain=next;
-    next.then(()=>{failure=null;},e=>{failure=e;console.error('INFO1 almacenamiento:',e);})
+    next.then(()=>{failures.delete(key);failure=failures.values().next().value||null;},e=>{failures.set(key,e);failure=e;console.error('INFO1 almacenamiento:',e);notify();})
       .finally(()=>{pending--;window.INFO1_LOCAL_SAVE_OK=!failure;if(!silent)notify();});
     return next;
   }
@@ -56,9 +57,9 @@
       if(key===KEY){await writeState(value);if(ticket===generation)try{localStorage.removeItem(JOURNAL);}catch(_){} }
       else {const tx=db.transaction('kv','readwrite'),done=txDone(tx);tx.objectStore('kv').put(value,key);await done;}
       try{localStorage.removeItem(key);}catch(_){}
-    });
+    },false,key);
   }
-  function removeItem(key){if(!isManaged(key)){localStorage.removeItem(key);return;}memory.delete(key);queue(async()=>{const tx=db.transaction('kv','readwrite'),done=txDone(tx);tx.objectStore('kv').delete(key);await done;});}
+  function removeItem(key){if(!isManaged(key)){localStorage.removeItem(key);return;}memory.delete(key);queue(async()=>{const tx=db.transaction('kv','readwrite'),done=txDone(tx);tx.objectStore('kv').delete(key);await done;},false,key);}
   // Recuperación de tinta sin bloquear el hilo principal.
   // Antes cada trazo hacía JSON.parse + JSON.stringify de TODO el journal en
   // localStorage. En iPad eso pausaba el event loop y Safari perdía contactos
@@ -75,7 +76,7 @@
       const tx=db.transaction('journal','readwrite'),done=txDone(tx);
       tx.objectStore('journal').put(record,stroke.id);
       await done;
-    },true);
+    },true,'journal:'+stroke.id);
   }
   const ready=(async()=>{
     db=await new Promise((resolve,reject)=>{const r=indexedDB.open('info1-study-storage-v2',2);r.onupgradeneeded=()=>{for(const name of ['state','notebooks','assets','kv','journal'])if(!r.result.objectStoreNames.contains(name))r.result.createObjectStore(name);};r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);r.onblocked=()=>reject(Error('Cerrá las otras pestañas de INFO 1 y reintentá.'));});
@@ -111,5 +112,5 @@
     window.INFO1_LOCAL_SAVE_OK=true;
   })();
   window.INFO1_LOCAL={getItem,setItem,removeItem};
-  window.INFO1_STATE_STORAGE={ready,journal,flush:()=>chain,status:()=>({pending,error:failure?.message||null}),get raw(){return getItem(KEY);}};
+  window.INFO1_STATE_STORAGE={ready,journal,flush:async()=>{await chain;if(failure)throw failure;},status:()=>({pending,error:failure?.message||null}),get raw(){return getItem(KEY);}};
 })();

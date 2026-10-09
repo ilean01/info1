@@ -88,14 +88,9 @@
       : 'nb-' + Date.now() + '-' + Math.random().toString(36).slice(2);
   }
 
-  function deviceId() {
-    let id = INFO1_LOCAL.getItem(DEVICE_KEY);
-    if (!id) {
-      id = uuid();
-      INFO1_LOCAL.setItem(DEVICE_KEY, id);
-    }
-    return id;
-  }
+  // Transport identity belongs to this running page, never to a copied backup.
+  const transportDeviceId = uuid();
+  function deviceId() { return transportDeviceId; }
 
   function appState() {
     try {

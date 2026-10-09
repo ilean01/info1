@@ -9,7 +9,7 @@
   let v14ServerSyncTimer=null,v14LastSyncStatus='',syncBusy=false,syncDirty=false,syncBlocked=!!window.INFO1_BOOT?.error||(location.protocol!=='file:'&&!window.INFO1_BOOT),syncRevision=window.INFO1_BOOT?.revision||0,localSaveFailed=false;
   save=function(){
     state.__settings??={};state.__settings.lastSavedAt=new Date().toISOString();
-    try{INFO1_LOCAL.setItem(STORAGE_KEY,JSON.stringify(state));INFO1_LOCAL.setItem(STORAGE_KEY+'-v15-unsynced','1');localSaveFailed=false;window.INFO1_LOCAL_SAVE_OK=true;}catch(e){localSaveFailed=true;window.INFO1_LOCAL_SAVE_OK=false;}
+    try{INFO1_LOCAL.setItem(STORAGE_KEY,JSON.stringify(state));INFO1_LOCAL.setItem(STORAGE_KEY+'-v15-unsynced','1');localSaveFailed=false;}catch(e){localSaveFailed=true;window.INFO1_LOCAL_SAVE_OK=false;}
     window.dispatchEvent(new Event('info1:local-save'));
     syncDirty=true;v14LastSyncStatus=localSaveFailed?' · navegador sin espacio: copia pendiente':' · copia en carpeta pendiente';renderPersistStatus();
     clearTimeout(v14ServerSyncTimer);v14ServerSyncTimer=setTimeout(flushStudyState,400);
@@ -55,10 +55,14 @@
   }
   function renderPersistStatus(){
     const saveEl=document.getElementById('saveStatus'),back=document.getElementById('lastBackupStatus');
-    if(saveEl)saveEl.innerHTML=`<strong>💾 Guardado automático</strong> · ${state.__settings?.lastSavedAt?fmtShortDate(state.__settings.lastSavedAt):"ahora"}${v14LastSyncStatus}`;
+    const storage=window.INFO1_STATE_STORAGE?.status();
+    if(saveEl && storage){saveEl.textContent=storage.error?'⚠️ Error al guardar en este dispositivo: '+storage.error:storage.pending?'💾 Guardando en este dispositivo…':'💾 Guardado en este dispositivo';}
+    else if(saveEl)saveEl.innerHTML=`<strong>💾 Guardado automático</strong> · ${state.__settings?.lastSavedAt?fmtShortDate(state.__settings.lastSavedAt):"ahora"}${v14LastSyncStatus}`;
     if(back)back.textContent=state.__settings?.lastBackupAt?`Backup: ${fmtShortDate(state.__settings.lastBackupAt)} ✅`:'Backup: todavía no exportado';
   }
 
+
+  window.addEventListener('info1:storage-status',renderPersistStatus);
 
   /* Recuperatorio */
   function recoverySettingField(){return activePartial==='p2'?'recoveryDateTimeP2':'recoveryDateTimeP1';}
