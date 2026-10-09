@@ -745,7 +745,7 @@
   setInterval(() => {
     setupSharedTimer();
     pollSharedTimer();
-  }, 1500);
+  }, 15000);
 
   // Evitar descargar megabytes de trazos en cada segundo.
   setInterval(reconcileTimerFromFullState, 60000);
