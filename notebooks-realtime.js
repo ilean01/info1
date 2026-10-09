@@ -3578,7 +3578,7 @@
         return;
       }
 
-      if (e && Number.isFinite(Number(e.clientX)) && Number.isFinite(Number(e.clientY))) {
+      if (e && e.type === 'pointerup' && Number.isFinite(Number(e.clientX)) && Number.isFinite(Number(e.clientY))) {
         const finalSamples = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
         const samples = finalSamples.length ? finalSamples.concat([e]) : [e];
         if (currentDraft.tool === 'line' || currentDraft.tool === 'shape') {
@@ -3919,7 +3919,10 @@
       if (channelReady) {
         channelConnecting = false;
         updateCloudStatus();
-        if (currentNotebookId) sendFocus();
+        if (currentNotebookId) {
+          sendFocus();
+          broadcast('snapshot-request', { notebookId: currentNotebookId });
+        }
         return;
       }
       if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
@@ -4289,14 +4292,14 @@
 
     if (m.kind === 'stroke-final' && m.stroke && m.stroke.id) {
       const key = nb.id + ':' + page.id + ':' + m.stroke.id;
-      const hadDraft=remoteDrafts.has(key);
       remoteDrafts.delete(key);
       const index = page.strokes.findIndex(function(s) { return s.id === m.stroke.id; });
       if (index >= 0) page.strokes[index] = JSON.parse(JSON.stringify(m.stroke));
       else page.strokes.push(JSON.parse(JSON.stringify(m.stroke)));
       page.redoStack = [];
       nb.updatedAt = new Date().toISOString();
-      if(!hadDraft && currentNotebookId===nb.id && currentPageId===page.id) drawStroke(m.stroke);
+      // The final packet is authoritative even when intermediate packets were lost.
+      if(currentNotebookId===nb.id && currentPageId===page.id) requestRedraw();
       clearTimeout(inkRefreshTimer);
       inkRefreshTimer=setTimeout(function(){
         refreshPageManagerPreviews();

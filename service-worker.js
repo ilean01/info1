@@ -1,4 +1,4 @@
-const CACHE = 'info1-pwa-network-first-v27-reconnect';
+const CACHE = 'info1-pwa-network-first-v28-ink-final';
 const APP_SHELL = [
   './',
   './index.html',
