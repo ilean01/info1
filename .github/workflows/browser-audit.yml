@@ -1,0 +1,27 @@
+name: INFO1 complete browser audit
+on:
+  push:
+    branches: [codex/audit-ci]
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [storage-merge, cloud-races, pencil-width, notebooks-browser]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install isolated browser test dependencies
+        run: |
+          npm install --prefix /tmp/info1-test playwright@1.56.1
+          /tmp/info1-test/node_modules/.bin/playwright install --with-deps chromium
+      - name: Run browser suite
+        env:
+          NODE_PATH: /tmp/info1-test/node_modules
+        run: node tests/${{ matrix.suite }}.cjs
