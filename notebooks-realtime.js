@@ -3903,7 +3903,7 @@
     channelName = desired;
     channelClient = sb;
     channelConnecting = true;
-    const thisChannel = sb.channel(desired, { config: { broadcast: { self: false, ack: true } } })
+    const thisChannel = sb.channel(desired, { config: { private: true, broadcast: { self: false, ack: true } } })
       .on('broadcast', { event: 'nb' }, function(msg) {
         handleRemote(msg && msg.payload ? msg.payload : {});
       });

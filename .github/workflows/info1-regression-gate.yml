@@ -1,0 +1,44 @@
+name: INFO1 regression gate
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  critical-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: JavaScript syntax
+        run: |
+          for file in app-bootstrap.js app-core.js app-study.js cloud-sync.js device-sync.js notebook-merge.js notebooks-realtime.js notebooks-resilience.js notebooks-collaboration.js notebooks-laser.js notebooks-interface.js notebooks-selection.js state-storage.js service-worker.js; do
+            node --check "$file"
+          done
+      - name: Regression tests without live credentials
+        run: |
+          set -e
+          node tests/durable-sync.cjs
+          node tests/ink-final.cjs
+          node tests/ink-sampling.cjs
+          node tests/reconnect-sync.cjs
+          node tests/study-autosave.cjs
+          node tests/audit-storage-identity.cjs
+      - name: Install Playwright
+        run: |
+          npm install --no-save playwright@1.56.1
+          npx playwright install --with-deps chromium
+      - name: Browser regression tests
+        run: |
+          set -e
+          node tests/cloud-races.cjs
+          node tests/storage-merge.cjs
+          node tests/notebooks-browser.cjs

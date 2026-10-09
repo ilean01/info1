@@ -335,7 +335,7 @@
 
     syncClient=c.client;
     syncConnecting=true;
-    const thisSyncChannel=c.client.channel(wantedSync,{config:{broadcast:{self:false,ack:true}}})
+    const thisSyncChannel=c.client.channel(wantedSync,{config:{private:true,broadcast:{self:false,ack:true}}})
       .on('broadcast',{event:'sync'},msg=>handleSync(msg && msg.payload ? msg.payload : {}));
     syncChannel=thisSyncChannel;
     thisSyncChannel.subscribe(status=>{

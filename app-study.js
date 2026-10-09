@@ -43,10 +43,55 @@
     }catch(e){alert('No se pudo recuperar la copia. No se modificó el progreso.');}
   }
   async function showStateHistory(){
-    const root=document.getElementById('versionHistory');root.hidden=false;
-    if(location.protocol==='file:'){root.textContent='Abrí INFO 1 con el servidor para ver las copias de la carpeta.';return;}
-    try{const r=await fetch('/api/state/history');if(!r.ok)throw Error();const obj=await r.json();root.innerHTML='<h3>Copias anteriores</h3><p>Se conservan las últimas 40 versiones de progreso. Las fotos permanecen en su carpeta.</p>'+obj.versions.map(v=>`<button data-restore-version="${v.revision}">Versión ${v.revision} · ${fmtShortDate(v.savedAt)}</button>`).join('');if(!obj.versions.length)root.innerHTML+='<p>Todavía no hay copias anteriores.</p>';root.querySelectorAll('[data-restore-version]').forEach(b=>b.onclick=async()=>{if(!confirm('¿Restaurar esta versión? Se descargará antes una copia del progreso actual.'))return;try{const [version,current]=await Promise.all([fetch('/api/state?revision='+b.dataset.restoreVersion).then(r=>{if(!r.ok)throw Error();return r.json();}),fetch('/api/state').then(r=>{if(!r.ok)throw Error();return r.json();})]);downloadStateSnapshot(state,'info1_antes_de_restaurar.json');syncRevision=current.revision||0;syncBlocked=false;applyLoadedState(version.state);root.hidden=true;}catch(e){alert('No se pudo restaurar. Se conservó tu progreso.');}});
-    }catch(e){root.textContent='No se pudo leer el historial. Comprobá que esté iniciado el servidor de esta versión.';}
+    const root=document.getElementById('versionHistory');
+    root.hidden=false;
+    root.textContent='Cargando copias de estudio…';
+    const sb=window.INFO1_SUPABASE_CLIENT;
+    const workspaceId=window.INFO1_CLOUD?.status?.workspaceId;
+    if(!sb || !workspaceId){
+      root.textContent='Conectá tu cuenta a Supabase para consultar las copias históricas. Podés exportar un backup completo desde Ajustes.';
+      return;
+    }
+    try {
+      const {data,error}=await sb.from('info1_state_history')
+        .select('revision,captured_at')
+        .eq('workspace_id',workspaceId)
+        .order('captured_at',{ascending:false}).limit(40);
+      if(error)throw error;
+      root.replaceChildren();
+      const heading=document.createElement('h3');heading.textContent='Copias históricas de estudio';
+      const detail=document.createElement('p');
+      detail.textContent='Se crea una copia de fichas y progreso como máximo cada 5 minutos; se conservan hasta 40. Las pizarras y fotos no forman parte de estas versiones y no se reemplazan al restaurar.';
+      root.append(heading,detail);
+      if(!data?.length){
+        const empty=document.createElement('p');empty.textContent='Todavía no hay copias históricas.';
+        root.appendChild(empty);return;
+      }
+      for(const version of data){
+        const button=document.createElement('button');
+        button.textContent='Versión '+version.revision+' · '+fmtShortDate(version.captured_at);
+        button.onclick=async()=>{
+          if(!confirm('¿Recuperar este progreso? Se descargará primero un backup completo del estado local. Los cuadernos se mantendrán como están.'))return;
+          button.disabled=true;
+          try{
+            const {data:backup,error:readError}=await sb.from('info1_state_history')
+              .select('state,revision')
+              .eq('workspace_id',workspaceId).eq('revision',version.revision).single();
+            if(readError||!backup?.state)throw readError||new Error('No se encontró la versión');
+            downloadStateSnapshot(state,'info1_antes_de_restaurar.json');
+            // La copia histórica no incluye dibujos: conservar siempre los actuales.
+            const restored=Object.assign({},backup.state,{
+              __notebooksV1:state.__notebooksV1
+            });
+            applyLoadedState(restored);
+            root.hidden=true;
+            alert('Progreso restaurado localmente. Comprobá el indicador de guardado en la nube antes de cerrar.');
+          }catch(e){alert('No se restauró el historial: '+(e?.message||'error desconocido'));}
+          finally{button.disabled=false;}
+        };
+        root.appendChild(button);
+      }
+    }catch(e){root.textContent='No se pudo consultar el historial: '+(e?.message||'error desconocido');}
   }
   function fmtShortDate(iso){
     if(!iso)return "—";const d=parseLocalDateValue(iso);if(Number.isNaN(d.getTime()))return "—";

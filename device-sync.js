@@ -739,15 +739,16 @@
 
   setInterval(() => {
     if (window.INFO1_CLOUD?.status?.conflict && !hasUnsyncedHumanChanges()) syncLatestData();
-  }, 900);
-  setInterval(syncLatestData, 8000);
+  }, 10000);
+  setInterval(syncLatestData, 30000);
 
   setInterval(() => {
     setupSharedTimer();
     pollSharedTimer();
-  }, 1500);
+  }, 15000);
 
-  setInterval(reconcileTimerFromFullState, 1200);
+  // Evitar descargar megabytes de trazos en cada segundo.
+  setInterval(reconcileTimerFromFullState, 60000);
   setInterval(checkLatestApp, 10000);
 
   installPullToRefresh();
