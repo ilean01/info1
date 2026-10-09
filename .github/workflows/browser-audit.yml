@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [storage-merge, cloud-races, pencil-width, notebooks-browser]
+        suite: [storage-merge, cloud-races, pencil-width, notebooks-browser, study-browser]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
