@@ -765,6 +765,22 @@
     finally {busy=false;if(dirty&&!conflict) {clearTimeout(pushTimer);pushTimer=setTimeout(pushLocal,1500);}}
   }
 
+  let reconciling = false;
+  async function reconcileConnection() {
+    if (!session || !workspace || busy || applyingRemote || conflict || reconciling || navigator.onLine === false) return;
+    if (dirty || localRaw() !== lastSeenRaw) { notifyLocalSave(); return; }
+    reconciling = true;
+    const workspaceId = workspace.id;
+    try {
+      const {data, error} = await sb.from('info1_state').select('revision').eq('workspace_id', workspaceId).maybeSingle();
+      if (error) throw error;
+      if (workspace?.id !== workspaceId || busy || applyingRemote || conflict) return;
+      if (dirty || localRaw() !== lastSeenRaw) { notifyLocalSave(); return; }
+      if (Number(data?.revision || 0) > remoteRevision) await loadCloudIntoLocal(false);
+    } catch (e) { console.warn('INFO1: no se pudo comprobar la revisión remota', e); }
+    finally { reconciling = false; }
+  }
+
   function startMonitoring() {
     lastSeenRaw = localRaw();
     if (monitor) clearInterval(monitor);
@@ -819,6 +835,7 @@
         loadCloudIntoLocal(false);
       })
       .subscribe(status => {
+        if (status === 'SUBSCRIBED') reconcileConnection();
         if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
           console.warn('INFO1 realtime:', status);
         }
@@ -929,12 +946,15 @@
     }
   });
 
-  window.addEventListener('online', () => {
-    if (session && workspace && dirty && !conflict) {
-      clearTimeout(pushTimer);
-      pushTimer = setTimeout(pushLocal, 1500);
-    }
+  window.addEventListener('online', reconcileConnection);
+  window.addEventListener('focus', reconcileConnection);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') reconcileConnection();
   });
+  // Check only the small revision number to recover missed realtime events.
+  setInterval(() => {
+    if (document.visibilityState !== 'hidden') reconcileConnection();
+  }, 30000);
 
   // Exponemos solo acciones seguras para diagnóstico/manual recovery.
   window.INFO1_CLOUD = {
