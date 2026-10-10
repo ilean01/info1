@@ -39,6 +39,7 @@
   let applyingRemote = false;
   let monitor = null;
   let pushTimer = null;
+  let quotaRetryAfter = 0;
   let channel = null;
   let booting = false;
 
@@ -736,6 +737,7 @@
 
   async function pushLocal() {
     if (!dirty || busy || conflict || applyingRemote || !session || !workspace) return;
+    if (Date.now() < quotaRetryAfter) return;
     busy=true;
     try {
       for(let attempt=0;attempt<3;attempt++) {
@@ -771,8 +773,13 @@
         lastSeenRaw=localRaw();INFO1_LOCAL.setItem(`${HYDRATED_PREFIX}${workspace.id}`,String(remoteRevision));showSyncedBadge();return;
       }
       dirty=true;badge('☁️ Reintentando guardar los cambios…','warn');
-    }catch(e){dirty=true;badge('☁️ Pendiente de sincronizar · '+(e?.message||'sin conexión'),'warn');}
-    finally {busy=false;if(dirty&&!conflict) {clearTimeout(pushTimer);pushTimer=setTimeout(pushLocal,1500);}}
+    }catch(e){
+      dirty=true;
+      const quotaBlocked = /(?:402|egress|quota|restricted|payment required)/i.test(String(e?.status||'')+' '+String(e?.code||'')+' '+String(e?.message||''));
+      if(quotaBlocked) quotaRetryAfter=Date.now()+5*60*1000;
+      badge('☁️ Pendiente de sincronizar · '+(e?.message||'sin conexión'),'warn');
+    }
+    finally {busy=false;if(dirty&&!conflict) {clearTimeout(pushTimer);pushTimer=setTimeout(pushLocal,Math.max(1500,quotaRetryAfter-Date.now()));}}
   }
 
   let reconciling = false;
