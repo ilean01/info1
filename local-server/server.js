@@ -47,7 +47,7 @@ const validId = s => typeof s==='string' && /^[a-zA-Z0-9_-]{1,100}$/.test(s);
 const json = (res,status,data) => {res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','Access-Control-Allow-Origin':'null'});res.end(JSON.stringify(data));};
 async function body(req) {
   let size=0,chunks=[];
-  for await (const chunk of req) {size+=chunk.length;if(size>12*1024*1024)throw Error('Payload too large');chunks.push(chunk);}
+  for await (const chunk of req) {size+=chunk.length;if(size>100*1024*1024)throw Error('Payload too large (100 MB maximum)');chunks.push(chunk);}
   return JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}');
 }
 const server=http.createServer(async(req,res)=>{
@@ -111,7 +111,7 @@ const server=http.createServer(async(req,res)=>{
       return json(res,200,{ok:true,filename:path.basename(file)});
     }
     return json(res,404,{error:'Not found'});
-  }catch(e){return json(res,e.message==='Payload too large'?413:400,{error:e.message});}
+  }catch(e){return json(res,e.message.startsWith('Payload too large')?413:400,{error:e.message});}
 });
 const wss=new WebSocketServer({server,path:'/ws',maxPayload:512*1024});
 wss.on('connection',(ws,req)=>{
