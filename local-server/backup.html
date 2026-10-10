@@ -1,0 +1,15 @@
+<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>INFO 1 · Copias de seguridad</title><style>body{font:16px system-ui;background:#0b1327;color:#eef4ff;max-width:650px;margin:40px auto;padding:20px}main{background:#15213a;border:1px solid #40516d;padding:25px;border-radius:18px}button,input{font:inherit;padding:12px;border-radius:10px;margin:7px 0}button{background:#7bb7f6;border:0;cursor:pointer}input{width:100%;box-sizing:border-box}p{line-height:1.5;color:#c8d7ee}#status{white-space:pre-wrap}</style></head><body><main><h1>INFO 1 · Backup local</h1><p>Guardá una copia de la base SQLite en tu Mac y descargá otra copia. Este botón <strong>no exporta todavía</strong> los datos que sigan únicamente en Supabase o en el almacenamiento de otra dirección web.</p><label>Token del servidor local <input id="token" type="password" autocomplete="off" placeholder="Pegá el token que muestra Terminal"></label><button id="backup">Crear y descargar backup</button><p id="status" role="status"></p><p>Las copias quedan también en <code>local-server/data/</code>. Guardá una segunda copia en un disco externo. No compartas tu token.</p></main><script>
+document.getElementById('backup').onclick=async()=>{
+ const status=document.getElementById('status');status.textContent='Preparando copia…';
+ try{
+ const headers={Authorization:'Bearer '+document.getElementById('token').value};
+ const r=await fetch('/api/backup',{method:'POST',headers});
+ const data=await r.json();if(!r.ok)throw Error(data.error||'Error de backup');
+ const file=await fetch('/api/backup/download?file='+encodeURIComponent(data.filename),{headers});
+ if(!file.ok)throw Error('No se pudo descargar');
+ const blob=await file.blob(),u=URL.createObjectURL(blob),a=document.createElement('a');
+ a.href=u;a.download=data.filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),30000);
+ status.textContent='Backup creado en la Mac y descarga iniciada: '+data.filename;
+ }catch(e){status.textContent='Error: '+e.message;}
+};
+</script></body></html>
