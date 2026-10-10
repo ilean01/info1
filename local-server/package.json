@@ -1,0 +1,16 @@
+{
+  "name": "info1-local-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Servidor LAN de INFO 1 (etapa de preparación)",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.0.0",
+    "ws": "^8.18.0"
+  }
+}
