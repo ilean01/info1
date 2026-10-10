@@ -52,7 +52,7 @@
     dirty=true;
     INFO1_LOCAL.setItem(UNSYNCED_KEY,'1');
     clearTimeout(pushTimer);
-    pushTimer=setTimeout(pushLocal,0);
+    pushTimer=setTimeout(pushLocal,750);
   }
   window.addEventListener('info1:local-save',notifyLocalSave);
   window.addEventListener('info1:shared-timer',notifyLocalSave);
