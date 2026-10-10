@@ -621,7 +621,7 @@ html,body{max-width:100%;overflow-x:hidden}
       <section class="focus-card">
         <div class="focus-head"><div><h3>📡 Radar rápido de examen</h3><p id="radarMiniSubtitle">Patrones repetidos en tus exámenes cargados.</p></div><button id="openExamRadar" class="soft-btn ghost" type="button">Ver radar</button></div>
         <div id="examRadarMini" class="radar-mini"></div>
-        <div class="persist-strip"><span id="saveStatus"><strong>💾 Guardado automático</strong> · local</span><span id="lastBackupStatus">Backup: todavía no exportado</span><button id="restoreAutoState" class="soft-btn ghost" type="button">Recuperar copia Mac</button></div>
+        <div class="persist-strip"><span id="saveStatus"><strong>💾 Guardado automático</strong> · local</span><span id="lastBackupStatus">Backup: todavía no exportado</span></div>
       </section>
     </div>
   </header>
@@ -703,7 +703,7 @@ html,body{max-width:100%;overflow-x:hidden}
     </details>
   </nav>
 
-  <main><section id="settingsView" class="view"><div class="status-page-head"><div><h2>Ajustes</h2><p>Sincronización, copias y recuperación de tu progreso.</p></div><button type="button" onclick="openView('boardView')">Volver al inicio</button></div><div id="settingsCloud"></div>  <div id="syncTools" hidden><b>Conservación del progreso</b><p>Si hay un conflicto, exportá el backup completo antes de recuperar otra copia. El progreso anterior del navegador se conserva como recuperación local.</p><button id="retrySync">Reintentar copia en carpeta</button><button id="useLocalRecovery">Recuperar progreso anterior del navegador</button></div><button id="showVersions">Historial de copias</button><div id="versionHistory" hidden></div>
+  <main><section id="settingsView" class="view"><div class="status-page-head"><div><h2>Ajustes</h2><p>Sincronización, copias y recuperación de tu progreso.</p></div><button type="button" onclick="openView('boardView')">Volver al inicio</button></div><div id="settingsCloud"></div><button id="restoreAutoState" class="soft-btn ghost" type="button">Recuperar copia Mac</button>  <div id="syncTools" hidden><b>Conservación del progreso</b><p>Si hay un conflicto, exportá el backup completo antes de recuperar otra copia. El progreso anterior del navegador se conserva como recuperación local.</p><button id="retrySync">Reintentar copia en carpeta</button><button id="useLocalRecovery">Recuperar progreso anterior del navegador</button></div><button id="showVersions">Historial de copias</button><div id="versionHistory" hidden></div>
 </section><section id="writtenView" class="view"><div class="status-page-head"><div><h2>Simulacro escrito · Ile + Elías</h2><p>Construcciones, demostraciones y análisis. Respuestas y fotos separadas; soluciones al entregar.</p></div></div><div class="written-shell"><div class="written-controls"><label>Rinden<select id="writtenWho"><option value="both">Ile y Elías</option><option value="ile">Ile</option><option value="elias">Elías</option></select></label><label>Bloque<select id="writtenCategory"><option value="all">Todos</option><option>PDA</option><option>NPDA</option><option>Gramáticas</option><option>TM</option></select></label><label>Ejercicios<select id="writtenCount"><option>5</option><option>8</option><option>12</option></select></label><label>Minutos<select id="writtenMinutes"><option>30</option><option selected>60</option><option>90</option><option>120</option></select></label><button id="writtenStart">Empezar</button></div><div id="writtenWork"></div><h3>Mis prácticas guardadas</h3><div id="writtenHistory" class="written-history"></div></div></section>
     <section id="boardView" class="view active"><div class="board">
       <div class="column"><div class="colhead"><h3>🔴 No sé</h3><div class="small">Al menos una evaluación está en rojo.</div></div><div id="col-unknown" class="cards"></div></div>
@@ -864,7 +864,7 @@ html,body{max-width:100%;overflow-x:hidden}
 <script async src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <script defer src="./notebook-merge.js?v=20261008-study-autosave"></script>
 <script defer src="./state-storage.js?v=20261009-audit"></script>
-<script defer src="./app-bootstrap.js?v=20261009-audit"></script>
+<script defer src="./app-bootstrap.js?v=20261010-integration"></script>
 
 
 <script>

@@ -3952,18 +3952,20 @@
   }
 
 
+  function flushRemoteStateCache() {
+    clearTimeout(remoteCacheTimer);remoteCacheTimer=null;
+    try {
+      if (window.INFO1_CLOUD?.cacheRealtimeState) window.INFO1_CLOUD.cacheRealtimeState(appState());
+      else INFO1_LOCAL.setItem(STATE_KEY, JSON.stringify(appState()));
+    } catch (error) {
+      window.INFO1_NOTEBOOK_RESILIENCE?.onPersistEnd(false);
+      console.warn('INFO1 cuadernos: no se pudo guardar el cambio recibido', error);
+    }
+  }
   function scheduleRemoteStateCache(delay) {
-    clearTimeout(remoteCacheTimer);
-    remoteCacheTimer=setTimeout(function() {
-      remoteCacheTimer=null;
-      try {
-        if (window.INFO1_CLOUD?.cacheRealtimeState) window.INFO1_CLOUD.cacheRealtimeState(appState());
-        else INFO1_LOCAL.setItem(STATE_KEY, JSON.stringify(appState()));
-      } catch (error) {
-        window.INFO1_NOTEBOOK_RESILIENCE?.onPersistEnd(false);
-        console.warn('INFO1 cuadernos: no se pudo guardar el cambio recibido', error);
-      }
-    }, Math.max(80, Number(delay)||500));
+    // A continuous stream must not postpone persistence indefinitely.
+    if(remoteCacheTimer)return;
+    remoteCacheTimer=setTimeout(flushRemoteStateCache, Math.max(80, Number(delay)||500));
   }
 
   function broadcast(kind, payload) {
@@ -4293,6 +4295,7 @@
       else page.strokes.push(JSON.parse(JSON.stringify(m.stroke)));
       page.redoStack = [];
       nb.updatedAt = new Date().toISOString();
+      window.INFO1_STATE_STORAGE?.journal(nb,page,m.stroke);
       // The final packet is authoritative even when intermediate packets were lost.
       if(currentNotebookId===nb.id && currentPageId===page.id) requestRedraw();
       clearTimeout(inkRefreshTimer);
@@ -4468,6 +4471,7 @@
     const flushInk=()=>{
       if(currentDraft&&canvas?.onpointerup)canvas.onpointerup({pointerId:drawPointerId,pointerType:'pen',preventDefault(){}});
       if(inkPersistTimer){clearTimeout(inkPersistTimer);inkPersistTimer=null;persist();}
+      if(remoteCacheTimer)flushRemoteStateCache();
     };
     window.addEventListener('pagehide',flushInk);
     document.addEventListener('visibilitychange',()=>{if(document.hidden)flushInk();});

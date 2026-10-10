@@ -32,6 +32,7 @@ jobs:
           node tests/reconnect-sync.cjs
           node tests/study-autosave.cjs
           node tests/audit-storage-identity.cjs
+          node tests/selection-lifecycle.cjs
       - name: Install Playwright
         run: |
           npm install --no-save playwright@1.56.1
@@ -42,3 +43,5 @@ jobs:
           node tests/cloud-races.cjs
           node tests/storage-merge.cjs
           node tests/notebooks-browser.cjs
+          node tests/pencil-width.cjs
+          node tests/study-browser.cjs

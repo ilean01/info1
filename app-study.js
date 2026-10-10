@@ -309,6 +309,9 @@
   const _v15View=openView;openView=function(id){_v15View(id);if(id==='writtenView')renderWritten();};
   const _v15Partial=switchPartial;switchPartial=function(partial,opts={}){_v15Partial(partial,opts);document.getElementById('writtenTab').classList.toggle('hidden',partial!=='p2');if(partial!=='p2'&&document.getElementById('writtenView').classList.contains('active'))openView('boardView');};
   document.getElementById('writtenStart').onclick=startWritten;setInterval(updateWrittenClock,1000);
+  if(location.hostname.endsWith('github.io')){
+    for(const id of ['retrySync','restoreAutoState'])document.getElementById(id).hidden=true;
+  }
   document.getElementById('showVersions').onclick=showStateHistory;document.getElementById('retrySync').onclick=()=>{if(syncBlocked){alert('Exportá un backup completo y usá “Recuperar copia Mac” para cargar la versión guardada por la otra ventana. Tus cambios permanecen en este navegador.');return;}syncDirty=true;flushStudyState();};
   document.getElementById('useLocalRecovery').onclick=()=>{let old=V15_LOCAL_RECOVERY;try{old??=JSON.parse(INFO1_LOCAL.getItem(STORAGE_KEY+'-v15-recovery')||'null');}catch(e){}if(!old)return alert('No hay otra copia local pendiente.');if(confirm('¿Recuperar el progreso anterior de este navegador? Se descarga antes una copia del estado actual.')){downloadStateSnapshot(state,'info1_antes_de_recuperar_local.json');applyLoadedState(old);}};
   document.getElementById('syncTools').hidden=!(syncBlocked||V15_LOCAL_RECOVERY);if(location.protocol!=='file:'&&!window.INFO1_BOOT){v14LastSyncStatus=' · reiniciá el servidor para activar el guardado protegido de esta versión';renderPersistStatus();}if(window.INFO1_BOOT?.error){v14LastSyncStatus=' · ERROR al leer la copia; archivo conservado. Exportá tu progreso antes de recuperar.';renderPersistStatus();}

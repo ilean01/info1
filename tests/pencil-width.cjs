@@ -15,7 +15,8 @@ const assert=require('node:assert/strict'),{spawn}=require('node:child_process')
   const id=await p.evaluate(()=>INFO1_NOTEBOOKS.current);await p.evaluate(()=>{window.dispatchEvent(new Event('pagehide'));return INFO1_STATE_STORAGE.flush();});
   await p.reload();await p.waitForFunction(()=>!!window.INFO1_NOTEBOOK_INTERFACE);await p.evaluate(id=>INFO1_NOTEBOOKS.open(id),id);
   assert.equal(await p.locator('#nbWidth').inputValue(),'7.5');assert.equal(await slider.inputValue(),'7.5');assert.deepEqual(errors,[]);
-  await p.screenshot({path:'/workspace/scratch/718a2ef97e2c/review-artifacts/pencil-slider-'+viewport.width+'.png'});
+  require('node:fs').mkdirSync('test-results',{recursive:true});
+  await p.screenshot({path:'test-results/pencil-slider-'+viewport.width+'.png'});
   console.log('PASS slider, stroke width, page/editor rebuild, tool switch and reload:',viewport.width);await context.close();
  }
  }finally{await browser.close();server.kill();}})().catch(e=>{console.error(e);process.exit(1)});
