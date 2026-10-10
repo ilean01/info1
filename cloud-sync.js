@@ -739,7 +739,17 @@
     busy=true;
     try {
       for(let attempt=0;attempt<3;attempt++) {
-        const current=await readRemote(), rev=Number(current?.revision||0);
+        // A cheap revision check avoids downloading the full (potentially huge)
+        // whiteboard state on every local save. A changed revision still
+        // downloads the remote state so three-way merge remains intact.
+        const headResult=await withTimeout(sb.from('info1_state')
+          .select('revision').eq('workspace_id',workspace.id).maybeSingle(),10000);
+        if(headResult.error)throw headResult.error;
+        const headRev=Number(headResult.data?.revision||0);
+        const current=(headResult.data && remoteRevision>0 && headRev===remoteRevision)
+          ? {revision:headRev}
+          : await readRemote();
+        const rev=Number(current?.revision||0);
         const here=localState(), beforeRaw=JSON.stringify(here);
         let candidate=here;
         if(current&&remoteRevision&&rev!==remoteRevision) {
@@ -797,8 +807,8 @@
       clearTimeout(pushTimer);
       // Estado y habilidades deben viajar casi en tiempo real entre dispositivos.
       // El debounce sigue protegiendo notas/escritura continua de demasiados POST.
-      pushTimer = setTimeout(pushLocal, 350);
-    }, 200);
+      pushTimer = setTimeout(pushLocal, 1500);
+    }, 600);
 
     if (channel) {
       try { sb.removeChannel(channel); } catch {}
