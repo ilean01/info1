@@ -19,6 +19,12 @@ CREATE TABLE IF NOT EXISTS workspaces(id TEXT PRIMARY KEY, state TEXT NOT NULL D
 CREATE TABLE IF NOT EXISTS board_events(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, board_id TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS board_events_lookup ON board_events(workspace_id,board_id,created_at);
 `);
+db.exec(`
+CREATE TABLE IF NOT EXISTS imported_browser_backups (
+ id TEXT PRIMARY KEY, source_origin TEXT NOT NULL, exported_at TEXT NOT NULL,
+ imported_at TEXT NOT NULL, payload TEXT NOT NULL
+);
+`);
 const getWorkspace = db.prepare('SELECT state,revision,updated_at FROM workspaces WHERE id=?');
 const putWorkspace = db.prepare(`INSERT INTO workspaces(id,state,revision,updated_at) VALUES(?,?,1,?)
  ON CONFLICT(id) DO UPDATE SET state=excluded.state,revision=workspaces.revision+1,updated_at=excluded.updated_at`);
@@ -64,6 +70,21 @@ const server=http.createServer(async(req,res)=>{
       return fs.createReadStream(full).pipe(res);
     }
     if(!authorized(req))return json(res,401,{error:'Unauthorized'});
+    if(req.method==='POST' && url.pathname==='/api/import-browser-backup'){
+      // Store the complete export unchanged. Never merge/overwrite existing study state.
+      // The user must explicitly review and migrate records later.
+      const data=await body(req);
+      if(data?.format!=='info1-browser-complete-v1'||!Array.isArray(data.databases)||!data.localStorage)
+        return json(res,400,{error:'Invalid INFO 1 backup'});
+      const payload=JSON.stringify(data),id=crypto.createHash('sha256').update(payload).digest('hex');
+      db.prepare('INSERT OR IGNORE INTO imported_browser_backups(id,source_origin,exported_at,imported_at,payload) VALUES(?,?,?,?,?)')
+        .run(id,String(data.origin||''),String(data.exportedAt||''),new Date().toISOString(),payload);
+      return json(res,200,{ok:true,importId:id,bytes:Buffer.byteLength(payload),note:'Archivo preservado sin fusionar ni reemplazar el estado actual'});
+    }
+    if(req.method==='GET' && url.pathname==='/api/import-browser-backups'){
+      const rows=db.prepare('SELECT id,source_origin,exported_at,imported_at,length(payload) AS bytes FROM imported_browser_backups ORDER BY imported_at DESC').all();
+      return json(res,200,{backups:rows});
+    }
     if(req.method==='GET' && url.pathname==='/api/state'){
       const w=url.searchParams.get('workspace')||'shared';if(!validId(w))return json(res,400,{error:'Invalid workspace'});
       return json(res,200,getWorkspace.get(w)||{state:'{}',revision:0,updated_at:null});
