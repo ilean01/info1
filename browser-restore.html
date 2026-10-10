@@ -1,0 +1,73 @@
+<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>INFO 1 · Restaurar backup</title><style>body{font:16px/1.5 system-ui;background:#0b1327;color:#eef4ff;max-width:740px;margin:35px auto;padding:20px}main{background:#15213a;padding:24px;border-radius:16px}button,input{font:inherit;margin:10px 0;padding:12px}button{background:#79b8f7;border:0;border-radius:10px;cursor:pointer}button:disabled{opacity:.4}pre{white-space:pre-wrap;overflow-wrap:anywhere}label{display:block}#warning{color:#ffda85}</style></head><body><main><h1>Restaurar INFO 1 desde backup</h1><p id="warning">IMPORTANTE: Esta herramienta reemplaza los datos locales del origen actual. Antes de restaurar, exportá un backup nuevo y cerrá todas las demás pestañas de INFO 1. No la uses para combinar datos de dos dispositivos.</p><label>Archivo JSON generado por «Backup completo» <input id="file" type="file" accept=".json,application/json"></label><pre id="preview" role="status">Seleccioná un archivo para revisar su contenido.</pre><label><input id="confirm" type="checkbox"> Confirmo que hice una copia del estado actual y quiero reemplazar los datos de este navegador.</label><button id="restore" disabled>Restaurar archivo seleccionado</button><pre id="status" role="status"></pre></main><script>
+let backup=null;
+const el=id=>document.getElementById(id);
+function fromB64(s){const raw=atob(s),b=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)b[i]=raw.charCodeAt(i);return b;}
+function decode(v){
+ if(!v||typeof v!=='object')return v;
+ if(Array.isArray(v))return v.map(decode);
+ switch(v.__info1type){
+ case 'undefined':return undefined;
+ case 'Blob':return new Blob([fromB64(v.bytes)],{type:v.mime||''});
+ case 'ArrayBuffer':return fromB64(v.bytes).buffer;
+ case 'TypedArray':{const b=fromB64(v.bytes);const cls=globalThis[v.constructor];return typeof cls==='function'&&cls.BYTES_PER_ELEMENT?new cls(b.buffer):b;}
+ case 'Date':return new Date(v.iso);
+ case 'Map':return new Map(v.entries.map(([k,val])=>[decode(k),decode(val)]));
+ case 'Set':return new Set(v.values.map(decode));
+ }
+ return Object.fromEntries(Object.entries(v).map(([k,val])=>[k,decode(val)]));
+}
+const request=r=>new Promise((resolve,reject)=>{r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
+const done=tx=>new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error||Error('Transaction aborted'));});
+function openDb(meta){
+ return new Promise((resolve,reject)=>{
+ const r=indexedDB.open(meta.name,meta.version);
+ r.onupgradeneeded=()=>{
+ const db=r.result;
+ for(const s of meta.stores){
+ let store;if(!db.objectStoreNames.contains(s.name))store=db.createObjectStore(s.name,{...(s.keyPath!==null?{keyPath:s.keyPath}:{}),autoIncrement:!!s.autoIncrement});else store=r.transaction.objectStore(s.name);
+ for(const ix of s.indexes||[])if(!store.indexNames.contains(ix.name))store.createIndex(ix.name,ix.keyPath,{unique:!!ix.unique,multiEntry:!!ix.multiEntry});
+ }
+ };
+ r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);r.onblocked=()=>reject(Error('Cerrá las otras pestañas antes de restaurar '+meta.name));
+ });
+}
+el('file').onchange=async()=>{
+ backup=null;el('restore').disabled=true;el('confirm').checked=false;
+ try{
+ const f=el('file').files[0];if(!f)return;
+ const data=JSON.parse(await f.text());
+ if(data.format!=='info1-browser-complete-v1'||!Array.isArray(data.databases)||!data.localStorage||typeof data.localStorage!=='object')throw Error('Formato de backup no compatible');
+ if(data.origin!==location.origin)throw Error('Este backup corresponde a '+data.origin+'. Abrí la herramienta desde ese mismo origen para restaurarlo.');
+ for(const db of data.databases){if(typeof db.name!=='string'||!Array.isArray(db.stores))throw Error('Base inválida');for(const store of db.stores)if(!Array.isArray(store.keys)||!Array.isArray(store.values)||store.keys.length!==store.values.length)throw Error('Registros inválidos');}
+ backup=data;
+ const count=data.databases.reduce((sum,db)=>sum+db.stores.reduce((n,s)=>n+s.values.length,0),0);
+ el('preview').textContent='Origen: '+data.origin+'\nFecha: '+data.exportedAt+'\nBases IndexedDB: '+data.databases.length+'\nRegistros: '+count+'\nClaves localStorage: '+Object.keys(data.localStorage).length+'\nArchivo: '+(f.size/1048576).toFixed(2)+' MB';
+ el('restore').disabled=false;
+ }catch(e){el('preview').textContent='No se puede restaurar: '+e.message;}
+};
+el('restore').onclick=async()=>{
+ if(!backup||!el('confirm').checked)return el('status').textContent='Tenés que confirmar la operación.';
+ el('restore').disabled=true;
+ try{
+ for(const meta of backup.databases){
+ el('status').textContent='Restaurando base '+meta.name+'…';
+ const db=await openDb(meta);
+ try{
+ for(const store of meta.stores){
+ const tx=db.transaction(store.name,'readwrite'),obj=tx.objectStore(store.name),finished=done(tx);
+ obj.clear();
+ for(let i=0;i<store.values.length;i++){
+ const value=decode(store.values[i]),key=decode(store.keys[i]);
+ if(obj.keyPath===null)obj.put(value,key);else obj.put(value);
+ }
+ await finished;
+ }
+ }finally{db.close();}
+ }
+ el('status').textContent='Restaurando configuración…';
+ // Do not restore Supabase authentication tokens, which are not needed for a local migration.
+ for(const [k,v] of Object.entries(backup.localStorage))if(!/^sb-.*-auth-token$/.test(k))localStorage.setItem(k,v);
+ el('status').textContent='Restauración terminada. Cerrá esta página y abrí INFO 1 nuevamente.';
+ }catch(e){el('status').textContent='ERROR: '+e.message+'. Conservá el archivo original y no borres datos.';console.error(e);}
+};
+</script></body></html>
