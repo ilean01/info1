@@ -748,7 +748,8 @@
   }, 15000);
 
   // Evitar descargar megabytes de trazos en cada segundo.
-  setInterval(reconcileTimerFromFullState, 60000);
+  // Full-state fallback is expensive; retain it at a low frequency for recovery.
+  setInterval(reconcileTimerFromFullState, 15 * 60 * 1000);
   setInterval(checkLatestApp, 10000);
 
   installPullToRefresh();
