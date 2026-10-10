@@ -48,6 +48,21 @@ const server=http.createServer(async(req,res)=>{
   try {
     const url=new URL(req.url,'http://localhost');
     if(url.pathname==='/health')return json(res,200,{ok:true,mode:'local',database:'sqlite'});
+    if(req.method==='GET' && (url.pathname==='/' || url.pathname==='/backup.html')) {
+      const file=path.join(__dirname,'backup.html');
+      const html=fs.readFileSync(file);
+      res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'});
+      return res.end(html);
+    }
+    if(req.method==='GET' && url.pathname==='/api/backup/download') {
+      if(!authorized(req))return json(res,401,{error:'Unauthorized'});
+      const filename=url.searchParams.get('file')||'';
+      if(!/^backup-[0-9TZ-]+\\.sqlite$/.test(filename))return json(res,400,{error:'Invalid filename'});
+      const full=path.join(DATA,filename);
+      if(!fs.existsSync(full))return json(res,404,{error:'Backup not found'});
+      res.writeHead(200,{'Content-Type':'application/octet-stream','Content-Disposition':'attachment; filename="'+filename+'"','Cache-Control':'no-store'});
+      return fs.createReadStream(full).pipe(res);
+    }
     if(!authorized(req))return json(res,401,{error:'Unauthorized'});
     if(req.method==='GET' && url.pathname==='/api/state'){
       const w=url.searchParams.get('workspace')||'shared';if(!validId(w))return json(res,400,{error:'Invalid workspace'});
